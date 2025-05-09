@@ -39,8 +39,8 @@ module.exports = new Component({
                     value: messageManager.getMessage('rules.gameplay.value')
                 },
                 {
-                    name: messageManager.getMessage('rules.treasures.title'),
-                    value: messageManager.getMessage('rules.treasures.value')
+                    name: messageManager.getMessage('rules.gold.title'),
+                    value: messageManager.getMessage('rules.gold.value')
                 },
                 {
                     name: messageManager.getMessage('rules.dangers.title'),

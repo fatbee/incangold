@@ -5,7 +5,7 @@ class Component {
 
     /**
      *
-     * @param {{customId: string, type: 'modal' | 'select' | 'button', options?: Partial<{ public: boolean }>, run: import("discord.js").Awaitable<(client: DiscordBot, interaction: import('discord.js').Interaction) => void> }} structure
+     * @param {{customId: string, type: 'modal' | 'select' | 'button', useStartsWith?: boolean, options?: Partial<{ public: boolean }>, run: import("discord.js").Awaitable<(client: DiscordBot, interaction: import('discord.js').Interaction) => void> }} structure
      */
     constructor(structure) {
         this.data = {

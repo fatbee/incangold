@@ -21,8 +21,32 @@ module.exports = new ApplicationCommand({
                     value: messageManager.getMessage('help.help.value')
                 },
                 {
+                    name: '/commands',
+                    value: '顯示所有可用的指令列表'
+                },
+                {
                     name: messageManager.getMessage('help.game.name'),
                     value: messageManager.getMessage('help.game.value')
+                },
+                {
+                    name: messageManager.getMessage('help.multiplayer.name'),
+                    value: messageManager.getMessage('help.multiplayer.value')
+                },
+                {
+                    name: messageManager.getMessage('help.multiplayer.create.name'),
+                    value: messageManager.getMessage('help.multiplayer.create.value')
+                },
+                {
+                    name: messageManager.getMessage('help.multiplayer.join.name'),
+                    value: messageManager.getMessage('help.multiplayer.join.value')
+                },
+                {
+                    name: messageManager.getMessage('help.multiplayer.leave.name'),
+                    value: messageManager.getMessage('help.multiplayer.leave.value')
+                },
+                {
+                    name: messageManager.getMessage('help.multiplayer.start.name'),
+                    value: messageManager.getMessage('help.multiplayer.start.value')
                 }
             )
             .setColor(messageManager.getMessage('general.color'))

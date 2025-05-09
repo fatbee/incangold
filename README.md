@@ -17,13 +17,13 @@ A Discord bot for playing the Incangold game in your Discord server. Built with 
 
 ## Game Rules
 
-Incangold is a push-your-luck game where players explore a temple to collect treasures:
+Incangold is a push-your-luck game where players explore a temple to collect gold:
 
-1. **Objective**: Collect as much treasure as possible without getting trapped in the temple.
-2. **Gameplay**: Each turn, you can choose to continue exploring or return to camp with your treasures.
-3. **Treasures**: As you explore, you'll find treasures of different values.
-4. **Dangers**: Beware of traps and dangers! If you encounter the same danger twice, you lose all treasures you haven't returned to camp.
-5. **Winning**: The player with the most treasure at the end of the game wins!
+1. **Objective**: Collect as much gold as possible without getting trapped in the temple.
+2. **Gameplay**: Each turn, you can choose to continue exploring or return to camp with your gold.
+3. **Gold**: As you explore, you'll find gold of different values.
+4. **Dangers**: Beware of traps and dangers! If you encounter the same danger twice, you lose all gold you haven't returned to camp.
+5. **Winning**: The player with the most gold at the end of the game wins!
 
 ## Setup
 

@@ -5,7 +5,7 @@ This directory contains all the images used in the Incangold game.
 ## Image Requirements
 
 1. Place your game images in this directory with the following naming convention:
-   - Treasure images: `treasure_5.jpg`, `treasure_7.jpg`, etc. (matching the values in message.properties)
+   - Gold images: `gold_5.jpg`, `gold_7.jpg`, etc. (matching the values in message.properties)
    - Danger images: `danger_snake.jpg`, `danger_spider.jpg`, etc.
    - Welcome image: `welcome.jpg`
 
@@ -16,16 +16,16 @@ This directory contains all the images used in the Incangold game.
 
 ## Image List
 
-### Treasure Images
-- `treasure_5.jpg` - 5 gold treasure
-- `treasure_7.jpg` - 7 gold treasure
-- `treasure_8.jpg` - 8 gold treasure
-- `treasure_9.jpg` - 9 gold treasure
-- `treasure_10.jpg` - 10 gold treasure
-- `treasure_11.jpg` - 11 gold treasure
-- `treasure_12.jpg` - 12 gold treasure
-- `treasure_15.jpg` - 15 gold treasure
-- `treasure_17.jpg` - 17 gold treasure
+### Gold Coin Images
+- `gold_5.jpg` - 5 gold coins
+- `gold_7.jpg` - 7 gold coins
+- `gold_8.jpg` - 8 gold coins
+- `gold_9.jpg` - 9 gold coins
+- `gold_10.jpg` - 10 gold coins
+- `gold_11.jpg` - 11 gold coins
+- `gold_12.jpg` - 12 gold coins
+- `gold_15.jpg` - 15 gold coins
+- `gold_17.jpg` - 17 gold coins
 
 ### Danger Images
 - `danger_snake.jpg` - Snake danger

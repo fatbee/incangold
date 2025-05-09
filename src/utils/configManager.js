@@ -8,6 +8,11 @@ const { AttachmentBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 
+// 運行時配置（不會持久化到文件）
+const runtimeConfig = {
+    timerEnabled: true // 默認啟用計時器
+};
+
 /**
  * Get a property from the message.properties file
  * @param {string} key - The property key
@@ -110,9 +115,45 @@ function getImageAttachment(key) {
     }
 }
 
+/**
+ * 檢查計時器是否啟用
+ * @returns {boolean} 計時器是否啟用
+ */
+function isTimerEnabled() {
+    return runtimeConfig.timerEnabled;
+}
+
+/**
+ * 設置計時器狀態
+ * @param {boolean} enabled - 是否啟用計時器
+ * @returns {boolean} 設置後的計時器狀態
+ */
+function setTimerEnabled(enabled) {
+    runtimeConfig.timerEnabled = enabled;
+    return runtimeConfig.timerEnabled;
+}
+
+/**
+ * Get the danger type mapping
+ * @returns {Object} The danger type mapping
+ */
+function getDangerTypeMap() {
+    return {
+        'snake': messageManager.getMessage('danger.type.snake'),
+        'spider': messageManager.getMessage('danger.type.spider'),
+        'mummy': messageManager.getMessage('danger.type.mummy'),
+        'fire': messageManager.getMessage('danger.type.fire'),
+        'rockfall': messageManager.getMessage('danger.type.rockfall')
+    };
+}
+
 module.exports = {
     getProperty,
     getPropertiesByPrefix,
     createImageAttachment,
-    getImageAttachment
+    getImageAttachment,
+    isTimerEnabled,
+    setTimerEnabled,
+    getDangerTypeMap
 };
+

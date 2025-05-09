@@ -34,7 +34,21 @@ class ComponentsListener {
 
             try {
                 if (interaction.isButton()) {
-                    const component = client.collection.components.buttons.get(interaction.customId);
+                    // 首先嘗試完全匹配
+                    let component = client.collection.components.buttons.get(interaction.customId);
+
+                    // 如果沒有找到完全匹配的組件，嘗試使用 startsWith 匹配
+                    if (!component) {
+                        // 遍歷所有按鈕組件
+                        for (const [customId, comp] of client.collection.components.buttons.entries()) {
+                            // 檢查組件是否設置了 useStartsWith 選項，並且 customId 是否匹配
+                            if (comp.useStartsWith && interaction.customId.startsWith(customId)) {
+                                component = comp;
+                                console.log(`找到匹配的按鈕組件 (startsWith): ${customId}`);
+                                break;
+                            }
+                        }
+                    }
 
                     if (!component) return;
 
