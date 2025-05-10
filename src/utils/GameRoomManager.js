@@ -189,6 +189,26 @@ class GameRoomManager {
     }
 
     /**
+     * 保存房間狀態
+     * @param {Object} room - 房間對象
+     * @returns {boolean} 是否成功保存
+     */
+    saveRoom(room) {
+        if (!room || !room.id) return false;
+
+        // 確保房間存在於遊戲房間映射中
+        if (!this.gameRooms.has(room.id)) {
+            this.gameRooms.set(room.id, room);
+        } else {
+            // 更新現有房間
+            this.gameRooms.set(room.id, room);
+        }
+
+        console.log(`房間狀態已保存: roomId=${room.id}`);
+        return true;
+    }
+
+    /**
      * 開始遊戲
      * @param {string} roomId - 房間ID
      * @returns {boolean} 是否成功開始
@@ -322,17 +342,95 @@ class GameRoomManager {
                 treasureValue = room.gameState.treasureValue;
                 console.log(`所有玩家返回營地，檢測到寶藏在場上: roomId=${room.id}, treasureValue=${treasureValue}`);
 
-                // 如果只有一個玩家返回營地，該玩家獲得寶藏
-                if (returningPlayers.length === 1) {
-                    luckyPlayerId = returningPlayers[0];
+                // 如果只有一個玩家返回營地，或者遊戲中只有一個玩家，該玩家獲得寶藏
+                if (returningPlayers.length === 1 || room.players.length === 1) {
+                    // 如果只有一個玩家返回，使用該玩家；如果遊戲中只有一個玩家，使用該玩家
+                    luckyPlayerId = returningPlayers.length === 1 ? returningPlayers[0] : room.players[0];
+                    const playerName = room.playerNames[luckyPlayerId] || luckyPlayerId;
+
+                    // 顯著的日誌，表明玩家獲得寶藏
+                    console.log(`\n========================================`);
+                    if (room.players.length === 1) {
+                        console.log(`單人遊戲中的玩家獲得寶藏！`);
+                    } else {
+                        console.log(`唯一返回營地的玩家獲得寶藏！`);
+                    }
+                    console.log(`房間ID: ${room.id}`);
+                    console.log(`玩家ID: ${luckyPlayerId}`);
+                    console.log(`玩家名稱: ${playerName}`);
+                    console.log(`寶藏價值: ${treasureValue}`);
+                    console.log(`玩家數量: ${room.players.length}`);
+                    console.log(`返回玩家數量: ${returningPlayers.length}`);
+                    console.log(`========================================\n`);
 
                     // 記錄玩家獲得的寶藏
+                    console.log(`準備記錄寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                    console.log(`寶藏記錄前: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
                     if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
                         room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                        console.log(`為玩家創建寶藏列表: playerId=${luckyPlayerId}`);
                     }
+
                     room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
                     console.log(`玩家獲得寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
-                    console.log(`玩家寶藏列表: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+                    console.log(`寶藏記錄後: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
+                    // 確保寶藏被正確保存到房間對象中
+                    const saveResult = this.saveRoom(room);
+                    console.log(`保存房間結果: ${saveResult ? '成功' : '失敗'}`);
+
+                    // 再次檢查寶藏是否被正確記錄
+                    console.log(`保存後再次檢查: ${JSON.stringify(room.gameState.playerCollectedTreasures[luckyPlayerId])}`);
+
+                    // 確保寶藏被正確記錄
+                    if (!room.gameState.playerCollectedTreasures[luckyPlayerId].includes(treasureValue)) {
+                        console.error(`寶藏記錄失敗: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                    } else {
+                        console.log(`\n✅ 寶藏成功添加到玩家收藏中！\n`);
+                    }
+                }
+
+                // 如果沒有幸運玩家但遊戲中只有一個玩家，那麼該玩家獲得寶藏
+                if (!luckyPlayerId && room.players.length === 1) {
+                    luckyPlayerId = room.players[0];
+                    const playerName = room.playerNames[luckyPlayerId] || luckyPlayerId;
+
+                    // 顯著的日誌，表明單人遊戲中的玩家獲得寶藏
+                    console.log(`\n========================================`);
+                    console.log(`單人遊戲中的玩家獲得寶藏！(所有玩家返回營地)`);
+                    console.log(`房間ID: ${room.id}`);
+                    console.log(`玩家ID: ${luckyPlayerId}`);
+                    console.log(`玩家名稱: ${playerName}`);
+                    console.log(`寶藏價值: ${treasureValue}`);
+                    console.log(`========================================\n`);
+
+                    // 記錄玩家獲得的寶藏
+                    console.log(`準備記錄寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                    console.log(`寶藏記錄前: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
+                    if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
+                        room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                        console.log(`為玩家創建寶藏列表: playerId=${luckyPlayerId}`);
+                    }
+
+                    room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
+                    console.log(`玩家獲得寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                    console.log(`寶藏記錄後: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
+                    // 確保寶藏被正確保存到房間對象中
+                    const saveResult = this.saveRoom(room);
+                    console.log(`保存房間結果: ${saveResult ? '成功' : '失敗'}`);
+
+                    // 再次檢查寶藏是否被正確記錄
+                    console.log(`保存後再次檢查: ${JSON.stringify(room.gameState.playerCollectedTreasures[luckyPlayerId])}`);
+
+                    // 確保寶藏被正確記錄
+                    if (!room.gameState.playerCollectedTreasures[luckyPlayerId].includes(treasureValue)) {
+                        console.error(`寶藏記錄失敗: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                    } else {
+                        console.log(`\n✅ 寶藏成功添加到玩家收藏中！(單人遊戲)\n`);
+                    }
                 }
 
                 // 重置寶藏狀態
@@ -417,7 +515,8 @@ class GameRoomManager {
             room.gameState.actionsInRound = 0;
             room.gameState.gold = 0;
             room.gameState.dangersEncountered = [];
-            room.gameState.eventLog = [];
+            // 不清空事件記錄，保留給結果嵌入消息使用
+            // room.gameState.eventLog = [];
             room.gameState.playerReturned = {}; // 重置玩家返回營地的標記
 
             return {
@@ -525,21 +624,46 @@ class GameRoomManager {
             if (returningPlayers.length === 1) {
                 // 只有一個玩家返回營地，獲得寶藏
                 const luckyPlayerId = returningPlayers[0];
+                const playerName = room.playerNames[luckyPlayerId] || luckyPlayerId;
+
+                // 顯著的日誌，表明唯一返回營地的玩家獲得寶藏
+                console.log(`\n========================================`);
+                console.log(`唯一返回營地的玩家獲得寶藏！(抽卡時)`);
+                console.log(`房間ID: ${roomId}`);
+                console.log(`玩家ID: ${luckyPlayerId}`);
+                console.log(`玩家名稱: ${playerName}`);
+                console.log(`寶藏價值: ${treasureValue}`);
+                console.log(`========================================\n`);
+
                 room.gameState.playerGold[luckyPlayerId] += treasureValue;
                 room.gameState.treasureInPlay = false;
                 room.gameState.treasureValue = 0;
 
                 // 記錄玩家獲得的寶藏
+                console.log(`準備記錄寶藏: roomId=${roomId}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                console.log(`寶藏記錄前: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
                 if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
                     room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                    console.log(`為玩家創建寶藏列表: playerId=${luckyPlayerId}`);
                 }
+
                 room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
                 console.log(`玩家獲得寶藏: roomId=${roomId}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
-                console.log(`玩家寶藏列表: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+                console.log(`寶藏記錄後: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
+                // 確保寶藏被正確保存到房間對象中
+                const saveResult = this.saveRoom(room);
+                console.log(`保存房間結果: ${saveResult ? '成功' : '失敗'}`);
+
+                // 再次檢查寶藏是否被正確記錄
+                console.log(`保存後再次檢查: ${JSON.stringify(room.gameState.playerCollectedTreasures[luckyPlayerId])}`);
 
                 // 確保寶藏被正確記錄
                 if (!room.gameState.playerCollectedTreasures[luckyPlayerId].includes(treasureValue)) {
                     console.error(`寶藏記錄失敗: roomId=${roomId}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                } else {
+                    console.log(`\n✅ 寶藏成功添加到玩家收藏中！(抽卡時)\n`);
                 }
 
                 // 為返回營地的玩家保存金幣

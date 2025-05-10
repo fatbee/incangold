@@ -66,14 +66,8 @@ module.exports = new Component({
             }
 
             // 增加回合數
-            if (room.gameState.currentRound < room.gameState.maxRounds) {
-                // 如果當前回合數小於最大回合數，則增加回合數
-                // 注意：在某些情況下（如重複危險），回合數可能已經增加
-                room.gameState.currentRound++;
-                console.log(`增加回合數: roomId=${room.id}, currentRound=${room.gameState.currentRound}`);
-            } else {
-                console.log(`已達到最大回合數，不再增加: roomId=${room.id}, currentRound=${room.gameState.currentRound}, maxRounds=${room.gameState.maxRounds}`);
-            }
+            room.gameState.currentRound++;
+            console.log(`增加回合數: roomId=${room.id}, currentRound=${room.gameState.currentRound}, maxRounds=${room.gameState.maxRounds}`);
 
             // 檢查是否是最後一回合
             if (room.gameState.currentRound > room.gameState.maxRounds) {

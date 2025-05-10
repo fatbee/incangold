@@ -1067,18 +1067,45 @@ module.exports.processAction = async function processAction(client, room) {
                     // 獲取舊消息
                     const oldMessage = await channel.messages.fetch(room.messageId);
 
-                    // 創建新消息
-                    const newMessage = await channel.send({ embeds: [dangerEmbed], components: [row] });
-
-                    // 更新房間的消息ID
-                    room.messageId = newMessage.id;
-
-                    // 嘗試刪除舊消息
+                    // 先嘗試刪除舊消息
+                    let oldMessageDeleted = false;
                     try {
+                        console.log(`嘗試刪除舊消息: roomId=${room.id}, oldMessageId=${oldMessage.id}`);
                         await oldMessage.delete();
-                        console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${oldMessage.id}, newMessageId=${newMessage.id}`);
+                        oldMessageDeleted = true;
+                        console.log(`已成功刪除舊消息: roomId=${room.id}, oldMessageId=${oldMessage.id}`);
                     } catch (deleteError) {
                         console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+                    }
+
+                    // 只有在成功刪除舊消息後才創建新消息
+                    if (oldMessageDeleted) {
+                        // 創建新消息
+                        console.log(`嘗試創建新消息: roomId=${room.id}`);
+                        const newMessage = await channel.send({ embeds: [dangerEmbed], components: [row] });
+
+                        // 更新房間的消息ID
+                        room.messageId = newMessage.id;
+                        console.log(`新消息已創建: roomId=${room.id}, newMessageId=${newMessage.id}`);
+                    } else {
+                        // 如果無法刪除舊消息，嘗試編輯它
+                        try {
+                            console.log(`嘗試編輯現有消息: roomId=${room.id}, messageId=${oldMessage.id}`);
+                            await oldMessage.edit({ embeds: [dangerEmbed], components: [row] });
+                            console.log(`無法刪除舊消息，已編輯現有消息: roomId=${room.id}, messageId=${oldMessage.id}`);
+                        } catch (editError) {
+                            console.error(`編輯舊消息時發生錯誤: roomId=${room.id}`, editError);
+
+                            // 如果編輯也失敗，嘗試創建新消息
+                            try {
+                                console.log(`嘗試創建新消息（編輯失敗後）: roomId=${room.id}`);
+                                const newMessage = await channel.send({ embeds: [dangerEmbed], components: [row] });
+                                room.messageId = newMessage.id;
+                                console.log(`編輯失敗，已創建新消息: roomId=${room.id}, newMessageId=${newMessage.id}`);
+                            } catch (sendError) {
+                                console.error(`創建新消息時發生錯誤: roomId=${room.id}`, sendError);
+                            }
+                        }
                     }
 
                     // 清除計時器
@@ -1119,11 +1146,30 @@ module.exports.processAction = async function processAction(client, room) {
                 room.gameState.treasureValue = 0;
 
                 // 記錄玩家獲得的寶藏
+                console.log(`準備記錄寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                console.log(`寶藏記錄前: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
                 if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
                     room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                    console.log(`為玩家創建寶藏列表: playerId=${luckyPlayerId}`);
                 }
+
                 room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
                 console.log(`玩家獲得寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                console.log(`寶藏記錄後: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
+                // 確保寶藏被正確保存到房間對象中
+                gameRoomManager.saveRoom(room);
+
+                // 再次檢查寶藏是否被正確記錄
+                console.log(`保存後再次檢查: ${JSON.stringify(room.gameState.playerCollectedTreasures[luckyPlayerId])}`);
+
+                // 確保寶藏被正確記錄
+                if (!room.gameState.playerCollectedTreasures[luckyPlayerId].includes(treasureValue)) {
+                    console.error(`寶藏記錄失敗: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                } else {
+                    console.log(`\n✅ 寶藏成功添加到玩家收藏中！\n`);
+                }
 
                 // 記錄事件
                 room.gameState.eventLog.push(`treasure_${treasureValue}`);
@@ -1416,19 +1462,49 @@ async function updateGameMessage(client, room) {
         if ((allPlayersActed && hasLastOutcome && !room.gameState.roundEnded) || room.gameState.createNewMessage) {
             // 重置創建新消息標記
             room.gameState.createNewMessage = false;
-            // 創建新消息
-            const row = createGameActionButtons(room.id);
-            const newMessage = await channel.send({ embeds: [embed], components: [row] });
 
-            // 更新房間的消息ID
-            room.messageId = newMessage.id;
-
-            // 嘗試刪除舊消息
+            // 先嘗試刪除舊消息
+            let oldMessageDeleted = false;
             try {
+                console.log(`嘗試刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
                 await message.delete();
-                console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${message.id}, newMessageId=${newMessage.id}`);
+                oldMessageDeleted = true;
+                console.log(`已成功刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
             } catch (deleteError) {
                 console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+            }
+
+            // 只有在成功刪除舊消息後才創建新消息
+            if (oldMessageDeleted) {
+                // 創建新消息
+                const row = createGameActionButtons(room.id);
+                console.log(`嘗試創建新消息: roomId=${room.id}`);
+                const newMessage = await channel.send({ embeds: [embed], components: [row] });
+
+                // 更新房間的消息ID
+                room.messageId = newMessage.id;
+                console.log(`新消息已創建: roomId=${room.id}, newMessageId=${newMessage.id}`);
+            } else {
+                // 如果無法刪除舊消息，嘗試編輯它
+                try {
+                    console.log(`嘗試編輯現有消息: roomId=${room.id}, messageId=${message.id}`);
+                    const row = createGameActionButtons(room.id);
+                    await message.edit({ embeds: [embed], components: [row] });
+                    console.log(`無法刪除舊消息，已編輯現有消息: roomId=${room.id}, messageId=${message.id}`);
+                } catch (editError) {
+                    console.error(`編輯舊消息時發生錯誤: roomId=${room.id}`, editError);
+
+                    // 如果編輯也失敗，嘗試創建新消息
+                    try {
+                        console.log(`嘗試創建新消息（編輯失敗後）: roomId=${room.id}`);
+                        const row = createGameActionButtons(room.id);
+                        const newMessage = await channel.send({ embeds: [embed], components: [row] });
+                        room.messageId = newMessage.id;
+                        console.log(`編輯失敗，已創建新消息: roomId=${room.id}, newMessageId=${newMessage.id}`);
+                    } catch (sendError) {
+                        console.error(`創建新消息時發生錯誤: roomId=${room.id}`, sendError);
+                    }
+                }
             }
         } else {
             // 否則更新現有消息
@@ -1524,7 +1600,7 @@ async function processRoundResult(client, room) {
 
                 resultEmbed.addFields({
                     name: playerName,
-                    value: `當前金幣: ${playerGold}\n已保存金幣: ${playerSecuredGold}\n行動: 返回營地${treasureText}`,
+                    value: `當前金幣: ${playerGold}\n${treasureText}`,
                     inline: true
                 });
             }
@@ -1706,9 +1782,58 @@ async function processRoundResult(client, room) {
         // 檢查遊戲是否結束
         // 注意：這裡我們檢查的是當前回合是否為第5回合，而不是下一回合
         const isLastRound = room.gameState.currentRound >= room.gameState.maxRounds;
+        console.log(`檢查是否是最後一回合: roomId=${room.id}, currentRound=${room.gameState.currentRound}, maxRounds=${room.gameState.maxRounds}, isLastRound=${isLastRound}`);
+
+        // 檢查是否有寶藏在場上但沒有被收集
+        if (result.type === 'all_returned' && room.gameState.treasureInPlay && room.gameState.treasureValue > 0) {
+            console.log(`\n========================================`);
+            console.log(`所有玩家返回營地，但寶藏沒有被收集！`);
+            console.log(`房間ID: ${room.id}`);
+            console.log(`寶藏值: ${room.gameState.treasureValue}`);
+            console.log(`玩家數量: ${room.players.length}`);
+            console.log(`========================================\n`);
+
+            // 如果只有一個玩家，那麼該玩家獲得寶藏
+            if (room.players.length === 1) {
+                const luckyPlayerId = room.players[0];
+                const playerName = room.playerNames[luckyPlayerId] || luckyPlayerId;
+                const treasureValue = room.gameState.treasureValue;
+
+                console.log(`\n========================================`);
+                console.log(`單人遊戲中的玩家獲得寶藏！(processRoundResult)`);
+                console.log(`房間ID: ${room.id}`);
+                console.log(`玩家ID: ${luckyPlayerId}`);
+                console.log(`玩家名稱: ${playerName}`);
+                console.log(`寶藏價值: ${treasureValue}`);
+                console.log(`========================================\n`);
+
+                // 記錄玩家獲得的寶藏
+                if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
+                    room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                }
+
+                room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
+                console.log(`玩家獲得寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+
+                // 確保寶藏被正確保存到房間對象中
+                gameRoomManager.saveRoom(room);
+
+                // 重置寶藏狀態
+                room.gameState.treasureInPlay = false;
+                room.gameState.treasureValue = 0;
+
+                // 更新結果對象
+                result.treasureCollected = true;
+                result.treasureValue = treasureValue;
+                result.luckyPlayer = luckyPlayerId;
+            }
+        }
 
         // 如果是最後一回合結束或遊戲已經結束，顯示最終結果
-        if (result.isGameOver || (isLastRound && (result.type === 'all_returned' || (result.type === 'danger' && result.isDuplicate)))) {
+        if (result.isGameOver || isLastRound) {
+            console.log(`遊戲結束條件滿足: roomId=${room.id}, isGameOver=${result.isGameOver}, isLastRound=${isLastRound}, resultType=${result.type}`);
+            // 確保遊戲狀態設置為已結束
+            room.status = 'finished';
             // 遊戲結束，顯示最終結果
             const finalEmbed = new EmbedBuilder()
                 .setTitle(`🏁 多人印加寶藏遊戲 - 遊戲結束`)
@@ -1812,18 +1937,41 @@ async function processRoundResult(client, room) {
             // 使用共用組件創建下一回合按鈕
             const row = createNextRoundButtons(room.id);
 
-            // 創建新消息
-            const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
-
-            // 更新房間的消息ID
-            room.messageId = newMessage.id;
-
-            // 嘗試刪除舊消息
+            // 先嘗試刪除舊消息
+            let oldMessageDeleted = false;
             try {
                 await message.delete();
-                console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${message.id}, newMessageId=${newMessage.id}`);
+                oldMessageDeleted = true;
+                console.log(`已刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
             } catch (deleteError) {
                 console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+            }
+
+            // 只有在成功刪除舊消息後才創建新消息
+            if (oldMessageDeleted) {
+                // 創建新消息
+                const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
+
+                // 更新房間的消息ID
+                room.messageId = newMessage.id;
+                console.log(`已創建新消息: roomId=${room.id}, newMessageId=${newMessage.id}`);
+            } else {
+                // 如果無法刪除舊消息，嘗試編輯它
+                try {
+                    await message.edit({ embeds: [resultEmbed], components: [row] });
+                    console.log(`無法刪除舊消息，已編輯現有消息: roomId=${room.id}, messageId=${message.id}`);
+                } catch (editError) {
+                    console.error(`編輯舊消息時發生錯誤: roomId=${room.id}`, editError);
+
+                    // 如果編輯也失敗，嘗試創建新消息
+                    try {
+                        const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
+                        room.messageId = newMessage.id;
+                        console.log(`編輯失敗，已創建新消息: roomId=${room.id}, newMessageId=${newMessage.id}`);
+                    } catch (sendError) {
+                        console.error(`創建新消息時發生錯誤: roomId=${room.id}`, sendError);
+                    }
+                }
             }
 
             // 添加1秒延遲，讓玩家有時間閱讀內容
@@ -1921,10 +2069,10 @@ async function startNewRound(client, room) {
         }
 
         // 檢查遊戲是否結束
-        if (room.gameState.currentRound > room.gameState.maxRounds) {
-            console.log(`遊戲結束，顯示最終結果: roomId=${room.id}, currentRound=${room.gameState.currentRound}, maxRounds=${room.gameState.maxRounds}`);
+        if (room.gameState.currentRound > room.gameState.maxRounds || room.status === 'finished') {
+            console.log(`遊戲結束，顯示最終結果: roomId=${room.id}, currentRound=${room.gameState.currentRound}, maxRounds=${room.gameState.maxRounds}, status=${room.status}`);
 
-            // 遊戲結束
+            // 確保遊戲狀態設置為已結束
             room.status = 'finished';
 
             // 顯示最終結果
@@ -2050,6 +2198,26 @@ async function startNewRound(client, room) {
         room.gameState.roundEnded = false; // 重置回合結束標記
         room.gameState.createNewMessage = false; // 重置創建新消息標記
 
+        // 確保每個玩家都有寶藏收集列表
+        for (const playerId of room.players) {
+            if (!room.gameState.playerCollectedTreasures[playerId]) {
+                room.gameState.playerCollectedTreasures[playerId] = [];
+                console.log(`為玩家初始化寶藏列表: playerId=${playerId}`);
+            }
+        }
+
+        // 保存房間狀態
+        gameRoomManager.saveRoom(room);
+
+        // 確保玩家收集的寶藏不會被重置
+        console.log(`開始新回合，檢查玩家寶藏: roomId=${room.id}`);
+        for (const playerId of room.players) {
+            if (!room.gameState.playerCollectedTreasures[playerId]) {
+                room.gameState.playerCollectedTreasures[playerId] = [];
+            }
+            console.log(`玩家寶藏列表: playerId=${playerId}, treasures=${JSON.stringify(room.gameState.playerCollectedTreasures[playerId])}`);
+        }
+
         // 初始化回合卡牌組
         initializeRoundDeck(room);
 
@@ -2078,11 +2246,19 @@ async function startNewRound(client, room) {
         for (const playerId of room.players) {
             const playerName = room.playerNames[playerId];
             const playerGold = room.gameState.playerGold[playerId];
-            const playerSecuredGold = room.gameState.playerSecuredGold[playerId] || 0;
+            // 雖然未直接使用，但在顯示玩家信息時可能有用
+            // const playerSecuredGold = room.gameState.playerSecuredGold[playerId] || 0;
+
+            // 獲取玩家收集的寶藏
+            const playerCollectedTreasures = room.gameState.playerCollectedTreasures[playerId] || [];
+            let treasureText = '';
+            if (playerCollectedTreasures.length > 0) {
+                treasureText = `\n已帶走寶藏: ${playerCollectedTreasures.map(t => `寶藏 ${t}`).join(', ')}`;
+            }
 
             roundEmbed.addFields({
                 name: playerName,
-                value: `當前金幣: ${playerGold}\n行動: 等待中...`,
+                value: `當前金幣: ${playerGold}\n行動: 等待中...${treasureText}`,
                 inline: true
             });
         }
@@ -2114,23 +2290,54 @@ async function startNewRound(client, room) {
                 return;
             }
 
-            console.log(`嘗試創建新消息: roomId=${room.id}`);
-            const newMessage = await channel.send({ embeds: [roundEmbed], components: [row] });
-
-            // 更新房間的消息ID
-            room.messageId = newMessage.id;
-            console.log(`新消息已創建: roomId=${room.id}, newMessageId=${newMessage.id}`);
-
-            // 嘗試刪除舊消息
+            // 先嘗試刪除舊消息
+            let oldMessageDeleted = false;
             try {
+                console.log(`嘗試刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
                 await message.delete();
-                console.log(`已刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
+                oldMessageDeleted = true;
+                console.log(`已成功刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
             } catch (deleteError) {
                 console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
             }
 
-            // 保存消息引用以便將來使用
-            room.gameMessage = newMessage;
+            // 只有在成功刪除舊消息後才創建新消息
+            if (oldMessageDeleted) {
+                console.log(`嘗試創建新消息: roomId=${room.id}`);
+                const newMessage = await channel.send({ embeds: [roundEmbed], components: [row] });
+
+                // 更新房間的消息ID
+                room.messageId = newMessage.id;
+                console.log(`新消息已創建: roomId=${room.id}, newMessageId=${newMessage.id}`);
+
+                // 保存消息引用以便將來使用
+                room.gameMessage = newMessage;
+            } else {
+                // 如果無法刪除舊消息，嘗試編輯它
+                try {
+                    console.log(`嘗試編輯現有消息: roomId=${room.id}, messageId=${message.id}`);
+                    await message.edit({ embeds: [roundEmbed], components: [row] });
+                    console.log(`無法刪除舊消息，已編輯現有消息: roomId=${room.id}, messageId=${message.id}`);
+
+                    // 保存消息引用以便將來使用
+                    room.gameMessage = message;
+                } catch (editError) {
+                    console.error(`編輯舊消息時發生錯誤: roomId=${room.id}`, editError);
+
+                    // 如果編輯也失敗，嘗試創建新消息
+                    try {
+                        console.log(`嘗試創建新消息（編輯失敗後）: roomId=${room.id}`);
+                        const newMessage = await channel.send({ embeds: [roundEmbed], components: [row] });
+                        room.messageId = newMessage.id;
+                        console.log(`編輯失敗，已創建新消息: roomId=${room.id}, newMessageId=${newMessage.id}`);
+
+                        // 保存消息引用以便將來使用
+                        room.gameMessage = newMessage;
+                    } catch (sendError) {
+                        console.error(`創建新消息時發生錯誤: roomId=${room.id}`, sendError);
+                    }
+                }
+            }
 
             // 設置計時器
             const timerEndTime = Date.now() + 20000; // 20秒
@@ -2144,8 +2351,8 @@ async function startNewRound(client, room) {
             const processAction = async () => {
                 console.log(`處理行動: roomId=${room.id}`);
                 try {
-                    // 定義危險類型映射
-                    const dangerTypeMap = configManager.getDangerTypeMap();
+                    // 不需要在這裡定義危險類型映射，因為它沒有被使用
+                    // const dangerTypeMap = configManager.getDangerTypeMap();
 
                     // 為未做出選擇的玩家設置默認行動
                     let playersUpdated = false;
@@ -2252,18 +2459,44 @@ async function startNewRound(client, room) {
                         // 使用共用組件創建下一回合按鈕
                         const row = createNextRoundButtons(room.id);
 
-                        // 創建新消息
-                        const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
-
-                        // 更新房間的消息ID
-                        room.messageId = newMessage.id;
-
-                        // 嘗試刪除舊消息
+                        // 先嘗試刪除舊消息
+                        let oldMessageDeleted = false;
                         try {
+                            console.log(`嘗試刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
                             await message.delete();
-                            console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${message.id}, newMessageId=${newMessage.id}`);
+                            oldMessageDeleted = true;
+                            console.log(`已成功刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
                         } catch (deleteError) {
                             console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+                        }
+
+                        // 只有在成功刪除舊消息後才創建新消息
+                        if (oldMessageDeleted) {
+                            console.log(`嘗試創建新消息: roomId=${room.id}`);
+                            const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
+
+                            // 更新房間的消息ID
+                            room.messageId = newMessage.id;
+                            console.log(`新消息已創建: roomId=${room.id}, newMessageId=${newMessage.id}`);
+                        } else {
+                            // 如果無法刪除舊消息，嘗試編輯它
+                            try {
+                                console.log(`嘗試編輯現有消息: roomId=${room.id}, messageId=${message.id}`);
+                                await message.edit({ embeds: [resultEmbed], components: [row] });
+                                console.log(`無法刪除舊消息，已編輯現有消息: roomId=${room.id}, messageId=${message.id}`);
+                            } catch (editError) {
+                                console.error(`編輯舊消息時發生錯誤: roomId=${room.id}`, editError);
+
+                                // 如果編輯也失敗，嘗試創建新消息
+                                try {
+                                    console.log(`嘗試創建新消息（編輯失敗後）: roomId=${room.id}`);
+                                    const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
+                                    room.messageId = newMessage.id;
+                                    console.log(`編輯失敗，已創建新消息: roomId=${room.id}, newMessageId=${newMessage.id}`);
+                                } catch (sendError) {
+                                    console.error(`創建新消息時發生錯誤: roomId=${room.id}`, sendError);
+                                }
+                            }
                         }
 
                         // 檢查遊戲是否結束
@@ -2601,7 +2834,8 @@ async function startNewRound(client, room) {
                             for (const playerId of room.players) {
                                 const playerName = room.playerNames[playerId];
                                 const playerGold = room.gameState.playerGold[playerId];
-                                const playerSecuredGold = room.gameState.playerSecuredGold[playerId] || 0;
+                                // 雖然未直接使用，但在顯示玩家信息時可能有用
+                                // const playerSecuredGold = room.gameState.playerSecuredGold[playerId] || 0;
                                 const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
                                 const isReturningNow = room.gameState.playerActions[playerId] === 'return';
 
