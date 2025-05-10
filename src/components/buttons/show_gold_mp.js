@@ -35,6 +35,12 @@ module.exports = new Component({
             // 總金幣只計算已保存的金幣，不包括當前回合的金幣
             const totalGold = playerSecuredGold;
 
+            // 獲取玩家收集的寶藏
+            const playerCollectedTreasures = room.gameState.playerCollectedTreasures[userId] || [];
+            const treasuresText = playerCollectedTreasures.length > 0
+                ? playerCollectedTreasures.map(value => `寶藏 ${value}`).join(', ')
+                : '尚未收集任何寶藏';
+
             // 創建一個嵌入訊息，只有玩家自己可見
             const goldEmbed = new EmbedBuilder()
                 .setTitle('💰 你的金幣')
@@ -43,7 +49,8 @@ module.exports = new Component({
                 .addFields(
                     { name: '當前回合金幣', value: `${playerGold} 金幣`, inline: true },
                     { name: '已保存金幣', value: `${playerSecuredGold} 金幣`, inline: true },
-                    { name: '總金幣', value: `${totalGold} 金幣`, inline: true }
+                    { name: '總金幣', value: `${totalGold} 金幣`, inline: true },
+                    { name: '已帶走寶藏', value: treasuresText, inline: false }
                 )
                 .setFooter({ text: '印加寶藏遊戲', iconURL: client.user.displayAvatarURL() });
 

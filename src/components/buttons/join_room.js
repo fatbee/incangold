@@ -75,17 +75,7 @@ module.exports = new Component({
             }
             console.log(`玩家不在房間中: ${userId}`);
 
-            // 檢查房間是否已滿
-            if (room.players.length >= 8) {
-                console.error(`房間已滿: ${roomId}`);
-                await interaction.reply({
-                    content: '房間已滿，無法加入。',
-                    ephemeral: true
-                });
-                return;
-            }
-            console.log(`房間未滿: ${roomId}, 當前玩家數量: ${room.players.length}`);
-
+            
             // 獲取玩家名稱
             const playerName = interaction.user.username;
             console.log(`玩家名稱: ${playerName}`);

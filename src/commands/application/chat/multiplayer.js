@@ -317,19 +317,32 @@ module.exports = new ApplicationCommand({
                     // 如果是房主離開，房間已經被解散
                     if (isHost) {
                         try {
-                            // 更新原始消息
+                            // 獲取頻道和消息
                             const channel = await client.channels.fetch(room.channelId);
                             const message = await channel.messages.fetch(room.messageId);
 
-                            const disbandEmbed = new EmbedBuilder()
-                                .setTitle('🎮 多人印加寶藏遊戲房間')
-                                .setDescription(`房間 \`${roomId}\` 已被解散。`)
-                                .setColor('#ff0000')
-                                .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
-
-                            await message.edit({ embeds: [disbandEmbed], components: [] });
+                            // 刪除消息
+                            await message.delete();
+                            console.log(`房主離開，已刪除房間消息: roomId=${roomId}, messageId=${room.messageId}`);
                         } catch (error) {
-                            console.error('更新房間信息錯誤:', error);
+                            console.error('刪除房間消息錯誤:', error);
+
+                            // 如果無法刪除消息，嘗試編輯消息
+                            try {
+                                const channel = await client.channels.fetch(room.channelId);
+                                const message = await channel.messages.fetch(room.messageId);
+
+                                const disbandEmbed = new EmbedBuilder()
+                                    .setTitle('🎮 多人印加寶藏遊戲房間')
+                                    .setDescription(`房間 \`${roomId}\` 已被解散。`)
+                                    .setColor('#ff0000')
+                                    .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
+
+                                await message.edit({ embeds: [disbandEmbed], components: [] });
+                                console.log(`無法刪除消息，已更新為解散狀態: roomId=${roomId}`);
+                            } catch (editError) {
+                                console.error('更新房間消息為解散狀態時發生錯誤:', editError);
+                            }
                         }
                     } else {
                         // 更新房間信息
@@ -423,19 +436,6 @@ module.exports = new ApplicationCommand({
                     }
                 }
 
-                // 檢查玩家數量
-                if (room.players.length < 2) {
-                    try {
-                        await interaction.reply({
-                            content: '至少需要2名玩家才能開始遊戲。',
-                            ephemeral: true
-                        });
-                        return;
-                    } catch (replyError) {
-                        console.error('回覆錯誤:', replyError);
-                        return;
-                    }
-                }
 
                 // 開始遊戲
                 const success = gameRoomManager.startGame(room.id);
@@ -781,6 +781,416 @@ module.exports = new ApplicationCommand({
 module.exports.processRoundResult = processRoundResult;
 module.exports.startNewRound = startNewRound;
 module.exports.updateGameMessage = updateGameMessage;
+module.exports.processAction = async function processAction(client, room) {
+    try {
+        // 定義處理行動的函數
+        console.log(`處理行動: roomId=${room.id}`);
+
+        // 為未做出選擇的玩家設置默認行動
+        let playersUpdated = false;
+        for (const playerId of room.players) {
+            // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
+            const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+
+            // 跳過已經返回營地的玩家
+            if (room.gameState.playerActions[playerId] === 'return' || hasReturnedToCamp) {
+                continue;
+            }
+
+            if (room.gameState.playerActions[playerId] === null) {
+                room.gameState.playerActions[playerId] = 'continue'; // 默認繼續探索
+                playersUpdated = true;
+                console.log(`為玩家設置默認行動: roomId=${room.id}, playerId=${playerId}, action=continue`);
+            }
+        }
+
+        // 更新遊戲消息，顯示哪些玩家已經做出選擇
+        if (playersUpdated) {
+            await updateGameMessage(client, room);
+        }
+
+        // 增加行動次數
+        room.gameState.actionsInRound++;
+        console.log(`行動次數增加: roomId=${room.id}, actionsInRound=${room.gameState.actionsInRound}`);
+
+        // 從回合卡牌組中抽取下一張卡
+        let outcome;
+        let goldValue = 0;
+        let dangerType = '';
+        let treasureValue = 0;
+
+        // 如果回合卡牌組為空，重新初始化
+        if (room.gameState.roundDeck.length === 0) {
+            initializeRoundDeck(room);
+        }
+
+        // 抽取卡牌
+        const card = room.gameState.roundDeck.pop();
+        console.log(`抽取卡牌: roomId=${room.id}, card=${JSON.stringify(card)}`);
+
+        if (card.type === 'gold') {
+            outcome = 'gold';
+            goldValue = card.value;
+        } else if (card.type === 'danger') {
+            outcome = 'danger';
+            dangerType = card.value;
+        } else if (card.type === 'treasure') {
+            outcome = 'treasure';
+            treasureValue = card.value;
+            room.gameState.treasureInPlay = true;
+            room.gameState.treasureValue = treasureValue;
+        }
+
+        // 處理行動結果
+        if (outcome === 'gold') {
+            // 處理發現金幣的情況
+
+            // 計算每個繼續探索的玩家獲得的金幣
+            // 只考慮當前繼續探索的玩家，不包括已返回營地的玩家
+            const continuingPlayers = room.players.filter(
+                playerId => {
+                    // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
+                    const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                    // 只有未返回營地且選擇繼續探索的玩家才能獲得金幣
+                    return !hasReturnedToCamp && room.gameState.playerActions[playerId] === 'continue';
+                }
+            );
+
+            // 如果沒有繼續探索的玩家，則不分配金幣
+            const goldPerPlayer = continuingPlayers.length > 0 ? Math.floor(goldValue / continuingPlayers.length) : 0;
+
+            // 為每個繼續探索的玩家添加金幣
+            for (const playerId of continuingPlayers) {
+                room.gameState.playerGold[playerId] += goldPerPlayer;
+            }
+
+            // 記錄事件
+            room.gameState.eventLog.push(`gold_${goldValue}`);
+            room.gameState.gold += goldValue;
+
+            // 設置最後一次行動結果，用於顯示玩家的實際選擇
+            room.gameState.lastOutcome = {
+                type: 'gold',
+                value: goldValue,
+                goldPerPlayer,
+                timestamp: Date.now() // 添加時間戳，用於判斷是否是新的行動結果
+            };
+
+            console.log(`發現金幣: roomId=${room.id}, goldValue=${goldValue}, goldPerPlayer=${goldPerPlayer}`);
+
+            // 標記選擇返回營地的玩家
+            for (const playerId of room.players) {
+                if (room.gameState.playerActions[playerId] === 'return') {
+                    // 將玩家標記為已返回營地
+                    if (!room.gameState.playerReturned) {
+                        room.gameState.playerReturned = {};
+                    }
+                    room.gameState.playerReturned[playerId] = true;
+
+                    // 保存玩家的金幣
+                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + room.gameState.playerGold[playerId];
+                    room.gameState.playerGold[playerId] = 0;
+
+                    console.log(`玩家返回營地: roomId=${room.id}, playerId=${playerId}`);
+                }
+            }
+        } else if (outcome === 'danger') {
+            // 處理遇到危險的情況
+            // 檢查是否是重複的危險
+            const isDuplicateDanger = room.gameState.dangersEncountered.includes(dangerType);
+
+            // 添加危險到已遇到的危險列表
+            if (!isDuplicateDanger) {
+                room.gameState.dangersEncountered.push(dangerType);
+            }
+
+            // 記錄事件
+            room.gameState.eventLog.push(`danger_${dangerType}`);
+
+            // 設置最後一次行動結果，用於顯示玩家的實際選擇
+            room.gameState.lastOutcome = {
+                type: 'danger',
+                value: dangerType,
+                isDuplicate: isDuplicateDanger,
+                timestamp: Date.now() // 添加時間戳，用於判斷是否是新的行動結果
+            };
+
+            console.log(`遇到危險: roomId=${room.id}, dangerType=${dangerType}, isDuplicate=${isDuplicateDanger}`);
+
+            // 標記選擇返回營地的玩家
+            for (const playerId of room.players) {
+                if (room.gameState.playerActions[playerId] === 'return') {
+                    // 將玩家標記為已返回營地
+                    if (!room.gameState.playerReturned) {
+                        room.gameState.playerReturned = {};
+                    }
+                    room.gameState.playerReturned[playerId] = true;
+
+                    // 保存玩家的金幣
+                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + room.gameState.playerGold[playerId];
+                    room.gameState.playerGold[playerId] = 0;
+
+                    console.log(`玩家返回營地: roomId=${room.id}, playerId=${playerId}`);
+                }
+            }
+
+            // 如果是重複危險，處理回合結果
+            if (isDuplicateDanger) {
+                console.log(`遇到重複危險，處理回合結果: roomId=${room.id}`);
+
+                // 繼續探索的玩家失去所有未保存的金幣，且不會保存
+                const continuingPlayers = room.players.filter(
+                    playerId => {
+                        // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
+                        const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                        // 檢查玩家是否在當前行動中選擇返回營地
+                        const isReturningNow = room.gameState.playerActions[playerId] === 'return';
+                        // 只有未返回營地且選擇繼續探索的玩家才會受到危險影響
+                        return !hasReturnedToCamp && !isReturningNow && room.gameState.playerActions[playerId] === 'continue';
+                    }
+                );
+
+                for (const playerId of continuingPlayers) {
+                    room.gameState.playerGold[playerId] = 0;
+                }
+
+                // 為當前選擇返回營地的玩家保存金幣
+                for (const playerId of room.players) {
+                    if (room.gameState.playerActions[playerId] === 'return' &&
+                        (!room.gameState.playerReturned || !room.gameState.playerReturned[playerId])) {
+
+                        // 將玩家標記為已返回營地
+                        if (!room.gameState.playerReturned) {
+                            room.gameState.playerReturned = {};
+                        }
+                        room.gameState.playerReturned[playerId] = true;
+
+                        // 保存玩家的金幣
+                        room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + room.gameState.playerGold[playerId];
+                        room.gameState.playerGold[playerId] = 0;
+                    }
+                }
+
+                // 創建危險嵌入消息
+                const dangerTranslations = configManager.getDangerTypeMap();
+                const dangerName = dangerTranslations[dangerType] || dangerType;
+
+                const dangerEmbed = new EmbedBuilder()
+                    .setTitle(`⚠️ 多人印加寶藏遊戲 - 遇到危險！`)
+                    .setDescription(`遇到了${dangerName}！這是第二次遇到相同的危險，所有繼續探索的玩家失去了所有未保存的金幣，且本回合結束！`)
+                    .setColor('#ff0000')
+                    .addFields(
+                        { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                        { name: '行動次數', value: `${room.gameState.actionsInRound}`, inline: true }
+                    )
+                    .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
+
+                // 添加事件日誌
+                const eventLogText = room.gameState.eventLog.map(event => {
+                    if (event.startsWith('gold_')) {
+                        const goldValue = event.split('_')[1];
+                        return `金幣 ${goldValue}`;
+                    } else if (event.startsWith('danger_')) {
+                        const dangerType = event.split('_')[1];
+                        const dangerTypeMap = configManager.getDangerTypeMap();
+                        return dangerTypeMap[dangerType] || dangerType;
+                    } else if (event.startsWith('treasure_')) {
+                        const treasureValue = event.split('_')[1];
+                        return `寶藏 ${treasureValue}`;
+                    }
+                    return event;
+                }).join(' → ');
+
+                dangerEmbed.addFields({ name: '事件日誌', value: eventLogText, inline: false });
+
+                // 添加玩家信息，顯示每個玩家的實際選擇和金幣
+                for (const playerId of room.players) {
+                    const playerName = room.playerNames[playerId];
+                    const playerGold = room.gameState.playerGold[playerId];
+                    const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                    const isReturningNow = room.gameState.playerActions[playerId] === 'return';
+
+                    let actionText;
+                    if (hasReturnedToCamp) {
+                        actionText = '已返回營地';
+                    } else if (isReturningNow) {
+                        actionText = '返回營地';
+                    } else {
+                        actionText = '💀 死亡';
+                    }
+
+                    // 獲取玩家收集的寶藏
+                    const playerCollectedTreasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                    let treasureText = '';
+                    if (playerCollectedTreasures.length > 0) {
+                        treasureText = `\n已帶走寶藏: ${playerCollectedTreasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                    }
+
+                    dangerEmbed.addFields({
+                        name: playerName,
+                        value: `當前金幣: ${playerGold}\n行動: ${actionText}${treasureText}`,
+                        inline: true
+                    });
+                }
+
+                try {
+                    // 使用共用組件創建下一回合按鈕
+                    const row = createNextRoundButtons(room.id);
+
+                    // 更新消息
+                    const channel = await client.channels.fetch(room.channelId);
+                    const message = await channel.messages.fetch(room.messageId);
+                    await message.edit({ embeds: [dangerEmbed], components: [row] });
+
+                    // 清除計時器
+                    timerManager.clearTimer(`room_${room.id}`);
+
+                    // 不再設置新的計時器，因為回合已經結束
+                    return;
+                } catch (error) {
+                    console.error(`處理重複危險時發生錯誤: roomId=${room.id}`, error);
+                }
+            }
+        } else if (outcome === 'treasure') {
+            // 處理發現寶藏的情況
+            console.log(`發現寶藏: roomId=${room.id}, treasureValue=${treasureValue}`);
+
+            // 檢查是否有唯一一個返回營地的玩家
+            const returningPlayers = room.players.filter(
+                playerId => room.gameState.playerActions[playerId] === 'return'
+            );
+
+            if (returningPlayers.length === 1) {
+                // 只有一個玩家返回營地，獲得寶藏
+                const luckyPlayerId = returningPlayers[0];
+                room.gameState.playerGold[luckyPlayerId] += treasureValue;
+                room.gameState.treasureInPlay = false;
+                room.gameState.treasureValue = 0;
+
+                // 記錄玩家獲得的寶藏
+                if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
+                    room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                }
+                room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
+                console.log(`玩家獲得寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+
+                // 記錄事件
+                room.gameState.eventLog.push(`treasure_${treasureValue}`);
+
+                // 設置最後一次行動結果
+                room.gameState.lastOutcome = {
+                    type: 'treasure',
+                    value: treasureValue,
+                    luckyPlayer: luckyPlayerId,
+                    timestamp: Date.now()
+                };
+            } else {
+                // 沒有玩家或多個玩家返回營地，寶藏保留在場上
+                // 記錄事件
+                room.gameState.eventLog.push(`treasure_${treasureValue}`);
+
+                // 設置最後一次行動結果
+                room.gameState.lastOutcome = {
+                    type: 'treasure',
+                    value: treasureValue,
+                    treasureInPlay: true,
+                    timestamp: Date.now()
+                };
+            }
+
+            // 標記選擇返回營地的玩家
+            for (const playerId of room.players) {
+                if (room.gameState.playerActions[playerId] === 'return') {
+                    // 將玩家標記為已返回營地
+                    if (!room.gameState.playerReturned) {
+                        room.gameState.playerReturned = {};
+                    }
+                    room.gameState.playerReturned[playerId] = true;
+
+                    // 保存玩家的金幣
+                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + room.gameState.playerGold[playerId];
+                    room.gameState.playerGold[playerId] = 0;
+
+                    console.log(`玩家返回營地: roomId=${room.id}, playerId=${playerId}`);
+                }
+            }
+        }
+
+        // 更新遊戲消息，顯示當前行動結果
+        try {
+            await updateGameMessage(client, room);
+
+            try {
+                // 重置所有玩家的行動
+                for (const playerId of room.players) {
+                    room.gameState.playerActions[playerId] = null;
+                }
+
+                // 再次更新遊戲消息，準備下一個行動
+                await updateGameMessage(client, room);
+
+                // 設置新的計時器
+                console.log(`設置新的計時器: roomId=${room.id}`);
+
+                // 定義設置計時器的函數
+                const setActionTimer = () => {
+                    timerManager.setTimer(
+                        `room_${room.id}`,
+                        async () => {
+                            console.log(`計時器回調觸發: roomId=${room.id}`);
+                            await processAction(client, room);
+                        },
+                        async (remainingSeconds) => {
+                            try {
+                                // 獲取最新的消息
+                                const channel = await client.channels.fetch(room.channelId);
+                                const fetchedMessage = await channel.messages.fetch(room.messageId);
+
+                                // 獲取當前的嵌入消息
+                                const currentEmbed = fetchedMessage.embeds[0];
+                                if (!currentEmbed) {
+                                    console.error(`無法獲取當前嵌入消息: roomId=${room.id}`);
+                                    return;
+                                }
+
+                                // 創建新的嵌入消息
+                                const updatedEmbed = EmbedBuilder.from(currentEmbed);
+
+                                // 更新倒數計時字段
+                                const fields = updatedEmbed.data.fields || [];
+                                const countdownFieldIndex = fields.findIndex(field => field.name.includes('⏱️'));
+
+                                if (countdownFieldIndex !== -1) {
+                                    fields[countdownFieldIndex].value = `${remainingSeconds} 秒`;
+                                    updatedEmbed.setFields(fields);
+
+                                    // 更新消息
+                                    await fetchedMessage.edit({ embeds: [updatedEmbed] });
+                                } else {
+                                    console.error(`找不到倒數計時字段: roomId=${room.id}`);
+                                }
+                            } catch (updateError) {
+                                console.error(`更新倒數計時顯示時發生錯誤: roomId=${room.id}`, updateError);
+                            }
+                        },
+                        20000 // 20秒
+                    );
+                    console.log(`計時器已設置: roomId=${room.id}`);
+                };
+
+                // 調用設置計時器函數
+                setActionTimer();
+            } catch (timeoutError) {
+                console.error(`setTimeout回調中發生錯誤: roomId=${room.id}`, timeoutError);
+            }
+        
+        } catch (updateError) {
+            console.error(`更新遊戲消息時發生錯誤: roomId=${room.id}`, updateError);
+        }
+    } catch (error) {
+        console.error(`處理行動時發生錯誤: roomId=${room.id}`, error);
+    }
+};
 
 /**
  * 更新遊戲消息
@@ -966,12 +1376,22 @@ async function processRoundResult(client, room) {
 
         if (result.type === 'all_returned') {
             // 所有玩家都返回營地
+            let description = `所有玩家都選擇返回營地，本回合結束。`;
+
+            // 如果有寶藏被收集，添加相關信息
+            if (result.treasureCollected && result.luckyPlayer) {
+                const luckyPlayerName = room.playerNames[result.luckyPlayer];
+                description += `\n\n💎 ${luckyPlayerName} 獲得了價值 ${result.treasureValue} 金幣的寶藏！`;
+                console.log(`顯示寶藏信息: luckyPlayer=${result.luckyPlayer}, treasureValue=${result.treasureValue}`);
+            }
+
             resultEmbed = new EmbedBuilder()
                 .setTitle(`🏕️ 多人印加寶藏遊戲 - 所有玩家返回營地`)
-                .setDescription('所有玩家都選擇返回營地，本回合結束。')
+                .setDescription(description)
                 .setColor('#00ff00')
                 .addFields(
-                    { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true }
+                    { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                    { name: '行動次數', value: `${result.actionsInRound || room.gameState.actionsInRound || 0}`, inline: true }
                 )
                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
 
@@ -979,11 +1399,48 @@ async function processRoundResult(client, room) {
             for (const playerId of room.players) {
                 const playerName = room.playerNames[playerId];
                 const playerGold = room.gameState.playerGold[playerId];
+                const playerSecuredGold = room.gameState.playerSecuredGold[playerId];
+
+                // 獲取玩家收集的寶藏
+                const playerCollectedTreasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                console.log(`玩家寶藏信息: playerId=${playerId}, treasures=${JSON.stringify(playerCollectedTreasures)}`);
+                let treasureText = '';
+                if (playerCollectedTreasures && playerCollectedTreasures.length > 0) {
+                    treasureText = `\n已帶走寶藏: ${playerCollectedTreasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                    console.log(`玩家寶藏文本: playerId=${playerId}, treasureText=${treasureText}`);
+                }
 
                 resultEmbed.addFields({
                     name: playerName,
-                    value: `當前金幣: ${playerGold}\n行動: 返回營地`,
+                    value: `當前金幣: ${playerGold}\n已保存金幣: ${playerSecuredGold}\n行動: 返回營地${treasureText}`,
                     inline: true
+                });
+            }
+
+            // 添加事件記錄
+            if (result.eventLog && result.eventLog.length > 0) {
+                console.log(`顯示事件日誌: eventLog=${JSON.stringify(result.eventLog)}`);
+
+                // 格式化事件記錄
+                const formattedEvents = result.eventLog.map(event => {
+                    if (event.startsWith('gold_')) {
+                        const goldValue = event.split('_')[1];
+                        return `金幣 ${goldValue}`;
+                    } else if (event.startsWith('danger_')) {
+                        const dangerType = event.split('_')[1];
+                        const dangerTypeMap = configManager.getDangerTypeMap();
+                        return dangerTypeMap[dangerType] || dangerType;
+                    } else if (event.startsWith('treasure_')) {
+                        const treasureValue = event.split('_')[1];
+                        return `寶藏 ${treasureValue}`;
+                    }
+                    return event;
+                });
+
+                resultEmbed.addFields({
+                    name: '📜 事件日誌',
+                    value: formattedEvents.join(' → '),
+                    inline: false
                 });
             }
         } else if (result.type === 'gold') {
@@ -1004,9 +1461,16 @@ async function processRoundResult(client, room) {
                 const playerGold = room.gameState.playerGold[playerId];
                 const playerAction = result.continuingPlayers.includes(playerId) ? '繼續探索' : '返回營地';
 
+                // 獲取玩家收集的寶藏
+                const playerCollectedTreasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                let treasureText = '';
+                if (playerCollectedTreasures.length > 0) {
+                    treasureText = `\n已帶走寶藏: ${playerCollectedTreasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                }
+
                 resultEmbed.addFields({
                     name: playerName,
-                    value: `當前金幣: ${playerGold}\n行動: ${playerAction}`,
+                    value: `當前金幣: ${playerGold}\n行動: ${playerAction}${treasureText}`,
                     inline: true
                 });
             }
@@ -1047,9 +1511,16 @@ async function processRoundResult(client, room) {
                     playerAction = '繼續探索';
                 }
 
+                // 獲取玩家收集的寶藏
+                const playerCollectedTreasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                let treasureText = '';
+                if (playerCollectedTreasures.length > 0) {
+                    treasureText = `\n已帶走寶藏: ${playerCollectedTreasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                }
+
                 resultEmbed.addFields({
                     name: playerName,
-                    value: `當前金幣: ${playerGold}\n行動: ${playerAction}`,
+                    value: `當前金幣: ${playerGold}\n行動: ${playerAction}${treasureText}`,
                     inline: true
                 });
             }
@@ -1081,9 +1552,16 @@ async function processRoundResult(client, room) {
                     playerAction = result.continuingPlayers.includes(playerId) ? '繼續探索' : '返回營地';
                 }
 
+                // 獲取玩家收集的寶藏
+                const playerCollectedTreasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                let treasureText = '';
+                if (playerCollectedTreasures.length > 0) {
+                    treasureText = `\n已帶走寶藏: ${playerCollectedTreasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                }
+
                 resultEmbed.addFields({
                     name: playerName,
-                    value: `當前金幣: ${playerGold}\n行動: ${playerAction}`,
+                    value: `當前金幣: ${playerGold}\n行動: ${playerAction}${treasureText}`,
                     inline: true
                 });
             }
@@ -1112,27 +1590,70 @@ async function processRoundResult(client, room) {
         }
 
         // 檢查遊戲是否結束
-        if (result.isGameOver) {
+        // 注意：這裡我們檢查的是當前回合是否為第5回合，而不是下一回合
+        const isLastRound = room.gameState.currentRound >= room.gameState.maxRounds;
+
+        // 如果是最後一回合結束或遊戲已經結束，顯示最終結果
+        if (result.isGameOver || (isLastRound && (result.type === 'all_returned' || (result.type === 'danger' && result.isDuplicate)))) {
             // 遊戲結束，顯示最終結果
             const finalEmbed = new EmbedBuilder()
-                .setTitle(`🏆 多人印加寶藏遊戲 - 遊戲結束！`)
-                .setDescription('遊戲結束！以下是最終結果：')
-                .setColor('#9932cc')
+                .setTitle(`🏁 多人印加寶藏遊戲 - 遊戲結束`)
+                .setDescription(`遊戲結束！以下是最終結果：`)
+                .setColor('#0099ff')
                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
 
-            // 計算最終排名
-            const playerRanking = room.players.map(playerId => ({
-                id: playerId,
-                name: room.playerNames[playerId],
-                gold: room.gameState.playerSecuredGold[playerId]
-            })).sort((a, b) => b.gold - a.gold);
+            // 計算每個玩家的總金幣和寶藏
+            const playerTotalGold = {};
+            const playerTreasureInfo = {};
 
-            // 添加排名信息
-            for (let i = 0; i < playerRanking.length; i++) {
-                const player = playerRanking[i];
+            for (const playerId of room.players) {
+                // 計算基本金幣（已保存的金幣）
+                const securedGold = room.gameState.playerSecuredGold[playerId] || 0;
+                const currentGold = room.gameState.playerGold[playerId] || 0;
+
+                // 獲取收集的寶藏
+                const treasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                const treasureSum = treasures.reduce((sum, value) => sum + value, 0);
+
+                // 計算總分
+                playerTotalGold[playerId] = securedGold + currentGold + treasureSum;
+
+                // 保存寶藏信息
+                playerTreasureInfo[playerId] = {
+                    treasures: treasures,
+                    treasureSum: treasureSum,
+                    securedGold: securedGold,
+                    totalScore: playerTotalGold[playerId]
+                };
+            }
+
+            // 按金幣數量排序玩家
+            const sortedPlayers = [...room.players].sort((a, b) => playerTotalGold[b] - playerTotalGold[a]);
+
+            // 添加玩家信息
+            for (let i = 0; i < sortedPlayers.length; i++) {
+                const playerId = sortedPlayers[i];
+                const playerName = room.playerNames[playerId];
+                const treasureInfo = playerTreasureInfo[playerId];
+                const rank = i + 1;
+                const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+
+                // 創建寶藏顯示文本
+                let treasureText = '';
+                if (treasureInfo.treasures.length > 0) {
+                    treasureText = `\n已帶走寶藏: ${treasureInfo.treasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                }
+
+                // 創建總分顯示文本
+                let scoreText = `金幣: ${treasureInfo.securedGold}`;
+                if (treasureInfo.treasureSum > 0) {
+                    scoreText += ` + 寶藏: ${treasureInfo.treasureSum}`;
+                }
+                scoreText += ` = 總分: ${treasureInfo.totalScore}`;
+
                 finalEmbed.addFields({
-                    name: `第${i + 1}名: ${player.name}`,
-                    value: `總金幣: ${player.gold}`,
+                    name: `${medal} ${playerName}`,
+                    value: scoreText + treasureText,
                     inline: false
                 });
             }
@@ -1147,8 +1668,28 @@ async function processRoundResult(client, room) {
                         .setEmoji('🔄')
                 );
 
-            // 更新消息
+            // 更新消息，顯示最終結果
             await message.edit({ embeds: [finalEmbed], components: [row] });
+
+            // 設置一個延遲，讓玩家有時間查看結果
+            setTimeout(async () => {
+                try {
+                    // 嘗試重新獲取消息（以防消息已被刪除或更改）
+                    try {
+                        const channel = await client.channels.fetch(room.channelId);
+                        const freshMessage = await channel.messages.fetch(room.messageId);
+
+                        // 刪除消息
+                        await freshMessage.delete();
+                        console.log(`遊戲結束，已刪除房間消息: roomId=${room.id}`);
+                    } catch (fetchError) {
+                        console.error(`獲取消息失敗，可能已被刪除: roomId=${room.id}`, fetchError);
+                        // 消息可能已被刪除，不需要進一步操作
+                    }
+                } catch (deleteError) {
+                    console.error(`刪除房間消息錯誤: roomId=${room.id}`, deleteError);
+                }
+            }, 60000); // 60秒後刪除消息
 
             // 解散房間
             gameRoomManager.disbandRoom(room.id);
@@ -1160,13 +1701,7 @@ async function processRoundResult(client, room) {
             // 更新消息
             await message.edit({ embeds: [resultEmbed], components: [row] });
 
-            // 如果是重複危險或所有玩家都返回營地，自動進入下一回合
-            if (result.nextRound) {
-                // 等待2秒後自動進入下一回合
-                setTimeout(() => {
-                    startNewRound(client, room);
-                }, 2000);
-            }
+
         }
     } catch (error) {
         console.error('處理回合結果時發生錯誤:', error);
@@ -1183,15 +1718,13 @@ function initializeRoundDeck(room) {
     // 清空卡牌組
     room.gameState.roundDeck = [];
 
-    // 添加寶藏卡（從未使用的寶藏卡中隨機選擇一張）
-    const availableTreasures = room.gameState.treasureCards.filter(
-        value => !room.gameState.usedTreasures.includes(value)
-    );
+    // 添加寶藏卡（按照回合數選擇對應的寶藏卡）
+    // 寶藏卡按照價值從小到大排序：5, 7, 8, 10, 12
+    // 第1回合使用價值5的寶藏卡，第2回合使用價值7的寶藏卡，以此類推
+    const treasureIndex = room.gameState.currentRound - 1; // 回合從1開始，索引從0開始
 
-    if (availableTreasures.length > 0) {
-        // 隨機選擇一張寶藏卡
-        const treasureIndex = Math.floor(Math.random() * availableTreasures.length);
-        const treasureValue = availableTreasures[treasureIndex];
+    if (treasureIndex >= 0 && treasureIndex < room.gameState.treasureCards.length) {
+        const treasureValue = room.gameState.treasureCards[treasureIndex];
 
         // 添加到卡牌組
         room.gameState.roundDeck.push({
@@ -1199,12 +1732,9 @@ function initializeRoundDeck(room) {
             value: treasureValue
         });
 
-        // 添加到已使用的寶藏卡
-        room.gameState.usedTreasures.push(treasureValue);
-
-        console.log(`添加寶藏卡: roomId=${room.id}, treasureValue=${treasureValue}`);
+        console.log(`添加寶藏卡: roomId=${room.id}, 回合=${room.gameState.currentRound}, treasureValue=${treasureValue}`);
     } else {
-        console.log(`沒有可用的寶藏卡: roomId=${room.id}`);
+        console.log(`當前回合沒有對應的寶藏卡: roomId=${room.id}, 回合=${room.gameState.currentRound}`);
     }
 
     // 添加危險卡（每種危險3張，共5種危險，總共15張）
@@ -1264,7 +1794,118 @@ async function startNewRound(client, room) {
         // 檢查遊戲是否結束
         if (room.gameState.currentRound > room.gameState.maxRounds) {
             console.log(`遊戲結束，顯示最終結果: roomId=${room.id}, currentRound=${room.gameState.currentRound}, maxRounds=${room.gameState.maxRounds}`);
-            await endGame(client, room);
+
+            // 遊戲結束
+            room.status = 'finished';
+
+            // 顯示最終結果
+            try {
+                // 獲取頻道和消息
+                const channel = await client.channels.fetch(room.channelId);
+                const message = await channel.messages.fetch(room.messageId);
+
+                // 創建最終結果嵌入消息
+                const finalEmbed = new EmbedBuilder()
+                    .setTitle(`🏁 多人印加寶藏遊戲 - 遊戲結束`)
+                    .setDescription(`遊戲結束！以下是最終結果：`)
+                    .setColor('#0099ff')
+                    .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
+
+                // 計算每個玩家的總金幣和寶藏
+                const playerTotalGold = {};
+                const playerTreasureInfo = {};
+
+                for (const playerId of room.players) {
+                    // 計算基本金幣（已保存的金幣）
+                    const securedGold = room.gameState.playerSecuredGold[playerId] || 0;
+                    const currentGold = room.gameState.playerGold[playerId] || 0;
+
+                    // 獲取收集的寶藏
+                    const treasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                    const treasureSum = treasures.reduce((sum, value) => sum + value, 0);
+
+                    // 計算總分
+                    playerTotalGold[playerId] = securedGold + currentGold + treasureSum;
+
+                    // 保存寶藏信息
+                    playerTreasureInfo[playerId] = {
+                        treasures: treasures,
+                        treasureSum: treasureSum,
+                        securedGold: securedGold,
+                        totalScore: playerTotalGold[playerId]
+                    };
+                }
+
+                // 按金幣數量排序玩家
+                const sortedPlayers = [...room.players].sort((a, b) => playerTotalGold[b] - playerTotalGold[a]);
+
+                // 添加玩家信息
+                for (let i = 0; i < sortedPlayers.length; i++) {
+                    const playerId = sortedPlayers[i];
+                    const playerName = room.playerNames[playerId];
+                    const treasureInfo = playerTreasureInfo[playerId];
+                    const rank = i + 1;
+                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+
+                    // 創建寶藏顯示文本
+                    let treasureText = '';
+                    if (treasureInfo.treasures.length > 0) {
+                        treasureText = `\n已帶走寶藏: ${treasureInfo.treasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                    }
+
+                    // 創建總分顯示文本
+                    let scoreText = `金幣: ${treasureInfo.securedGold}`;
+                    if (treasureInfo.treasureSum > 0) {
+                        scoreText += ` + 寶藏: ${treasureInfo.treasureSum}`;
+                    }
+                    scoreText += ` = 總分: ${treasureInfo.totalScore}`;
+
+                    finalEmbed.addFields({
+                        name: `${medal} ${playerName}`,
+                        value: scoreText + treasureText,
+                        inline: false
+                    });
+                }
+
+                // 創建按鈕
+                const row = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId(`new_game_${room.id}`)
+                            .setLabel('開始新遊戲')
+                            .setStyle(ButtonStyle.Primary)
+                            .setEmoji('🔄')
+                    );
+
+                // 更新消息，顯示最終結果
+                await message.edit({ embeds: [finalEmbed], components: [row] });
+
+                // 設置一個延遲，讓玩家有時間查看結果
+                setTimeout(async () => {
+                    try {
+                        // 嘗試重新獲取消息（以防消息已被刪除或更改）
+                        try {
+                            const channel = await client.channels.fetch(room.channelId);
+                            const freshMessage = await channel.messages.fetch(room.messageId);
+
+                            // 刪除消息
+                            await freshMessage.delete();
+                            console.log(`遊戲結束，已刪除房間消息: roomId=${room.id}`);
+                        } catch (fetchError) {
+                            console.error(`獲取消息失敗，可能已被刪除: roomId=${room.id}`, fetchError);
+                            // 消息可能已被刪除，不需要進一步操作
+                        }
+                    } catch (deleteError) {
+                        console.error(`刪除房間消息錯誤: roomId=${room.id}`, deleteError);
+                    }
+                }, 60000); // 60秒後刪除消息
+
+                // 解散房間
+                gameRoomManager.disbandRoom(room.id);
+            } catch (error) {
+                console.error(`顯示最終結果時發生錯誤: roomId=${room.id}`, error);
+            }
+
             return;
         }
 
@@ -1306,6 +1947,7 @@ async function startNewRound(client, room) {
         for (const playerId of room.players) {
             const playerName = room.playerNames[playerId];
             const playerGold = room.gameState.playerGold[playerId];
+            const playerSecuredGold = room.gameState.playerSecuredGold[playerId] || 0;
 
             roundEmbed.addFields({
                 name: playerName,
@@ -1353,7 +1995,7 @@ async function startNewRound(client, room) {
             room.gameState.timerEndTime = timerEndTime;
             console.log(`計時器結束時間已設置: roomId=${room.id}, endTime=${new Date(timerEndTime).toLocaleTimeString()}`);
 
-            // 設置計時器，如果5秒內沒有所有玩家都做出選擇，自動執行下一個行動
+            // 設置計時器，如果20秒內沒有所有玩家都做出選擇，自動執行下一個行動
             console.log(`嘗試設置計時器: roomId=${room.id}`);
 
             // 定義處理行動的函數
@@ -1362,7 +2004,7 @@ async function startNewRound(client, room) {
                 try {
                     // 定義危險類型映射
                     const dangerTypeMap = configManager.getDangerTypeMap();
-                    
+
                     // 為未做出選擇的玩家設置默認行動
                     let playersUpdated = false;
                     for (const playerId of room.players) {
@@ -1404,8 +2046,8 @@ async function startNewRound(client, room) {
                             room.gameState.playerGold[playerId] = 0;
                         }
 
-                        // 進入下一回合
-                        room.gameState.currentRound++;
+                        // 準備下一回合的狀態，但不自動增加回合數
+                        // 玩家需要點擊"下一回合"按鈕才能進入下一回合
                         room.gameState.actionsInRound = 0;
                         room.gameState.gold = 0;
                         room.gameState.dangersEncountered = [];
@@ -1422,7 +2064,7 @@ async function startNewRound(client, room) {
                             .setDescription(`已達到行動次數上限(30次)，本回合結束。所有玩家的金幣已保存。`)
                             .setColor('#FFA500') // 橙色
                             .addFields(
-                                { name: '回合', value: `${room.gameState.currentRound-1}/${room.gameState.maxRounds}`, inline: true },
+                                { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
                                 { name: '行動次數', value: `30`, inline: true }
                             )
                             .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -1482,19 +2124,48 @@ async function startNewRound(client, room) {
                                 .setColor('#9932cc')
                                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
 
-                            // 計算最終排名
-                            const playerRanking = room.players.map(playerId => ({
-                                id: playerId,
-                                name: room.playerNames[playerId],
-                                gold: room.gameState.playerSecuredGold[playerId]
-                            })).sort((a, b) => b.gold - a.gold);
+                            // 計算最終排名，包括寶藏
+                            const playerRanking = room.players.map(playerId => {
+                                // 獲取基本金幣
+                                const securedGold = room.gameState.playerSecuredGold[playerId] || 0;
+
+                                // 獲取收集的寶藏
+                                const treasures = room.gameState.playerCollectedTreasures[playerId] || [];
+                                const treasureSum = treasures.reduce((sum, value) => sum + value, 0);
+
+                                // 計算總分
+                                const totalScore = securedGold + treasureSum;
+
+                                return {
+                                    id: playerId,
+                                    name: room.playerNames[playerId],
+                                    securedGold: securedGold,
+                                    treasures: treasures,
+                                    treasureSum: treasureSum,
+                                    totalScore: totalScore
+                                };
+                            }).sort((a, b) => b.totalScore - a.totalScore);
 
                             // 添加排名信息
                             for (let i = 0; i < playerRanking.length; i++) {
                                 const player = playerRanking[i];
+
+                                // 創建寶藏顯示文本
+                                let treasureText = '';
+                                if (player.treasures.length > 0) {
+                                    treasureText = `\n已帶走寶藏: ${player.treasures.map(t => `寶藏 ${t}`).join(', ')}`;
+                                }
+
+                                // 創建總分顯示文本
+                                let scoreText = `金幣: ${player.securedGold}`;
+                                if (player.treasureSum > 0) {
+                                    scoreText += ` + 寶藏: ${player.treasureSum}`;
+                                }
+                                scoreText += ` = 總分: ${player.totalScore}`;
+
                                 finalEmbed.addFields({
                                     name: `第${i + 1}名: ${player.name}`,
-                                    value: `總金幣: ${player.gold}`,
+                                    value: scoreText + treasureText,
                                     inline: false
                                 });
                             }
@@ -1509,8 +2180,28 @@ async function startNewRound(client, room) {
                                         .setEmoji('🔄')
                                 );
 
-                            // 更新消息
+                            // 更新消息，顯示最終結果
                             await message.edit({ embeds: [finalEmbed], components: [finalRow] });
+
+                            // 設置一個延遲，讓玩家有時間查看結果
+                            setTimeout(async () => {
+                                try {
+                                    // 嘗試重新獲取消息（以防消息已被刪除或更改）
+                                    try {
+                                        const channel = await client.channels.fetch(room.channelId);
+                                        const freshMessage = await channel.messages.fetch(room.messageId);
+
+                                        // 刪除消息
+                                        await freshMessage.delete();
+                                        console.log(`遊戲結束，已刪除房間消息: roomId=${room.id}`);
+                                    } catch (fetchError) {
+                                        console.error(`獲取消息失敗，可能已被刪除: roomId=${room.id}`, fetchError);
+                                        // 消息可能已被刪除，不需要進一步操作
+                                    }
+                                } catch (deleteError) {
+                                    console.error(`刪除房間消息錯誤: roomId=${room.id}`, deleteError);
+                                }
+                            }, 60000); // 60秒後刪除消息
 
                             // 解散房間
                             gameRoomManager.disbandRoom(room.id);
@@ -1588,6 +2279,23 @@ async function startNewRound(client, room) {
                         };
 
                         console.log(`發現金幣: roomId=${room.id}, goldValue=${goldValue}, goldPerPlayer=${goldPerPlayer}`);
+
+                        // 標記選擇返回營地的玩家
+                        for (const playerId of room.players) {
+                            if (room.gameState.playerActions[playerId] === 'return') {
+                                // 將玩家標記為已返回營地
+                                if (!room.gameState.playerReturned) {
+                                    room.gameState.playerReturned = {};
+                                }
+                                room.gameState.playerReturned[playerId] = true;
+
+                                // 保存玩家的金幣
+                                room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + room.gameState.playerGold[playerId];
+                                room.gameState.playerGold[playerId] = 0;
+
+                                console.log(`玩家返回營地: roomId=${room.id}, playerId=${playerId}`);
+                            }
+                        }
                     } else if (outcome === 'treasure') {
                         // 處理發現寶藏的情況
                         console.log(`發現寶藏: roomId=${room.id}, treasureValue=${treasureValue}`);
@@ -1650,7 +2358,24 @@ async function startNewRound(client, room) {
 
                         console.log(`遇到危險: roomId=${room.id}, dangerType=${dangerType}, isDuplicate=${isDuplicateDanger}`);
 
-                        // 如果是重複的危險，顯示危險信息並結束回合
+                        // 標記選擇返回營地的玩家
+                        for (const playerId of room.players) {
+                            if (room.gameState.playerActions[playerId] === 'return') {
+                                // 將玩家標記為已返回營地
+                                if (!room.gameState.playerReturned) {
+                                    room.gameState.playerReturned = {};
+                                }
+                                room.gameState.playerReturned[playerId] = true;
+
+                                // 保存玩家的金幣
+                                room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + room.gameState.playerGold[playerId];
+                                room.gameState.playerGold[playerId] = 0;
+
+                                console.log(`玩家返回營地: roomId=${room.id}, playerId=${playerId}`);
+                            }
+                        }
+
+                        // 如果是重複危險，處理回合結果
                         if (isDuplicateDanger) {
                             console.log(`遇到重複危險，處理回合結果: roomId=${room.id}`);
 
@@ -1659,33 +2384,45 @@ async function startNewRound(client, room) {
                                 playerId => {
                                     // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
                                     const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                                    // 檢查玩家是否在當前行動中選擇返回營地
+                                    const isReturningNow = room.gameState.playerActions[playerId] === 'return';
                                     // 只有未返回營地且選擇繼續探索的玩家才會受到危險影響
-                                    return !hasReturnedToCamp && room.gameState.playerActions[playerId] === 'continue';
+                                    return !hasReturnedToCamp && !isReturningNow && room.gameState.playerActions[playerId] === 'continue';
                                 }
                             );
 
                             for (const playerId of continuingPlayers) {
                                 room.gameState.playerGold[playerId] = 0;
                             }
-                            
-                            // 為返回營地的玩家保存金幣
-                            const returningPlayers = room.players.filter(
-                                playerId => room.gameState.playerActions[playerId] === 'return'
-                            );
-                            for (const playerId of returningPlayers) {
-                                room.gameState.playerSecuredGold[playerId] += room.gameState.playerGold[playerId];
-                                room.gameState.playerGold[playerId] = 0;
-                                room.gameState.playerActions[playerId] = null;
+
+                            // 為當前選擇返回營地的玩家保存金幣
+                            for (const playerId of room.players) {
+                                if (room.gameState.playerActions[playerId] === 'return' &&
+                                    (!room.gameState.playerReturned || !room.gameState.playerReturned[playerId])) {
+
+                                    // 將玩家標記為已返回營地
+                                    if (!room.gameState.playerReturned) {
+                                        room.gameState.playerReturned = {};
+                                    }
+                                    room.gameState.playerReturned[playerId] = true;
+
+                                    // 保存玩家的金幣
+                                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + room.gameState.playerGold[playerId];
+                                    room.gameState.playerGold[playerId] = 0;
+                                }
                             }
-                            
-                            // 修正顯示在嵌入消息中的玩家狀態
+
+                            // 創建危險嵌入消息
+                            const dangerTranslations = configManager.getDangerTypeMap();
+                            const dangerName = dangerTranslations[dangerType] || dangerType;
+
                             const dangerEmbed = new EmbedBuilder()
-                                .setTitle(`⚠️ 多人印加寶藏遊戲 - 遇到重複危險！`)
-                                .setDescription(`遇到了第二個 ${dangerTypeMap[dangerType] || dangerType} 危險！回合結束，未返回營地的玩家失去所有金幣。`)
-                                .setColor('#FF0000') // 紅色
+                                .setTitle(`⚠️ 多人印加寶藏遊戲 - 遇到危險！`)
+                                .setDescription(`遇到了${dangerName}！這是第二次遇到相同的危險，所有繼續探索的玩家失去了所有未保存的金幣，且本回合結束！`)
+                                .setColor('#ff0000')
                                 .addFields(
                                     { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
-                                    { name: '行動次數', value: `${room.gameState.actionsInRound}/30`, inline: true }
+                                    { name: '行動次數', value: `${room.gameState.actionsInRound}`, inline: true }
                                 )
                                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
 
@@ -1713,85 +2450,72 @@ async function startNewRound(client, room) {
                                 const playerGold = room.gameState.playerGold[playerId];
                                 const playerSecuredGold = room.gameState.playerSecuredGold[playerId] || 0;
                                 const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                                const isReturningNow = room.gameState.playerActions[playerId] === 'return';
 
                                 let actionText;
-                                if (hasReturnedToCamp || room.gameState.playerActions[playerId] === 'return') {
+                                if (hasReturnedToCamp) {
+                                    actionText = '已返回營地';
+                                } else if (isReturningNow) {
                                     actionText = '返回營地';
                                 } else {
-                                    actionText = '死亡';
+                                    actionText = '💀 死亡';
                                 }
 
                                 dangerEmbed.addFields({
                                     name: playerName,
-                                    value: `當前金幣: ${playerGold}\n已保存金幣: ${playerSecuredGold}\n行動: ${actionText}`,
+                                    value: `當前金幣: ${playerGold}\n行動: ${actionText}`,
                                     inline: true
                                 });
                             }
 
-                            // 使用共用組件創建下一回合按鈕
-                            const row = createNextRoundButtons(room.id);
-
-                            // 更新遊戲消息
                             try {
-                                // 檢查 room.gameMessage 是否存在
-                                if (room.gameMessage) {
-                                    await room.gameMessage.edit({
-                                        embeds: [dangerEmbed],
-                                        components: [row]
-                                    });
-                                } else {
-                                    // 如果 gameMessage 不存在，嘗試通過 channelId 和 messageId 獲取消息
-                                    console.log(`嘗試獲取頻道和消息: roomId=${room.id}, channelId=${room.channelId}, messageId=${room.messageId}`);
-                                    const channel = await client.channels.fetch(room.channelId);
-                                    if (!channel) {
-                                        console.error(`無法獲取頻道: roomId=${room.id}, channelId=${room.channelId}`);
-                                        return;
-                                    }
+                                // 使用共用組件創建下一回合按鈕
+                                const row = createNextRoundButtons(room.id);
 
-                                    const message = await channel.messages.fetch(room.messageId);
-                                    if (!message) {
-                                        console.error(`無法獲取消息: roomId=${room.id}, messageId=${room.messageId}`);
-                                        return;
-                                    }
+                                // 更新消息
+                                const channel = await client.channels.fetch(room.channelId);
+                                const message = await channel.messages.fetch(room.messageId);
+                                await message.edit({ embeds: [dangerEmbed], components: [row] });
 
-                                    await message.edit({
-                                        embeds: [dangerEmbed],
-                                        components: [row]
-                                    });
+                                // 清除計時器
+                                timerManager.clearTimer(`room_${room.id}`);
 
-                                    // 保存消息引用以便將來使用
-                                    room.gameMessage = message;
-                                }
+                                // 移除自動進入下一回合的計時器，讓玩家手動點擊按鈕進入下一回合
+                                // setTimeout(async () => {
+                                //     await startNewRound(client, room);
+                                // }, 2000);
+
+                                // 不再設置新的計時器，因為回合已經結束
+                                return;
                             } catch (error) {
-                                console.error(`更新遊戲消息時發生錯誤: roomId=${room.id}`, error);
+                                console.error(`處理重複危險時發生錯誤: roomId=${room.id}`, error);
                             }
-
-                            // 不在這裡增加回合數，而是在點擊"下一回合"按鈕時增加
-
-                            return;
                         }
                     }
 
                     // 更新遊戲消息，顯示當前行動結果
-                    await updateGameMessage(client, room);
-
-                    // 等待3秒，讓玩家有時間查看結果
-                    console.log(`等待3秒，讓玩家查看結果: roomId=${room.id}`);
-
-                    // 使用setTimeout等待3秒
-                    setTimeout(async () => {
-                        // 重置所有玩家的行動
-                        for (const playerId of room.players) {
-                            room.gameState.playerActions[playerId] = null;
-                        }
-
-                        // 再次更新遊戲消息，準備下一個行動
+                    try {
                         await updateGameMessage(client, room);
 
-                        // 設置新的計時器
-                        console.log(`設置新的計時器: roomId=${room.id}`);
-                        setActionTimer();
-                    }, 3000); // 3秒 = 3000毫秒
+                        try {
+                            // 重置所有玩家的行動
+                            for (const playerId of room.players) {
+                                room.gameState.playerActions[playerId] = null;
+                            }
+
+                            // 再次更新遊戲消息，準備下一個行動
+                            await updateGameMessage(client, room);
+
+                            // 設置新的計時器
+                            console.log(`設置新的計時器: roomId=${room.id}`);
+                            setActionTimer();
+                        } catch (timeoutError) {
+                            console.error(`setTimeout回調中發生錯誤: roomId=${room.id}`, timeoutError);
+                        }
+                        
+                    } catch (updateError) {
+                        console.error(`更新遊戲消息時發生錯誤: roomId=${room.id}`, updateError);
+                    }
                 } catch (error) {
                     console.error(`處理行動時發生錯誤: roomId=${room.id}`, error);
                 }
@@ -1852,6 +2576,15 @@ async function startNewRound(client, room) {
         console.error(`開始新回合時發生錯誤: roomId=${room ? room.id : 'unknown'}`, error);
     }
 }
+
+
+
+
+
+
+
+
+
 
 
 

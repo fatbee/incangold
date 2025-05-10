@@ -114,9 +114,33 @@ module.exports = new Component({
                 const updateGameMessage = require('../../commands/application/chat/multiplayer').updateGameMessage;
                 await updateGameMessage(client, room);
 
-                // 處理回合結果
-                const processRoundResult = require('../../commands/application/chat/multiplayer').processRoundResult;
-                await processRoundResult(client, room);
+                // 檢查是否所有玩家都已返回營地
+                const allPlayersReturned = room.players.every(playerId => {
+                    // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
+                    const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                    // 檢查玩家是否在當前行動中選擇返回營地
+                    const isReturningNow = room.gameState.playerActions[playerId] === 'return';
+                    // 玩家已返回營地或當前選擇返回營地
+                    return hasReturnedToCamp || isReturningNow;
+                });
+
+                // 如果所有玩家都已返回營地，處理回合結果
+                // 否則，繼續遊戲流程（抽取下一張卡）
+                if (allPlayersReturned) {
+                    // 處理回合結果
+                    const processRoundResult = require('../../commands/application/chat/multiplayer').processRoundResult;
+                    await processRoundResult(client, room);
+                } else {
+                    // 繼續遊戲流程，抽取下一張卡
+                    // 這裡不需要做任何事情，因為計時器會自動觸發下一個行動
+                    // 但我們需要重新設置計時器，因為我們剛剛清除了它
+                    const processAction = require('../../commands/application/chat/multiplayer').processAction;
+                    if (typeof processAction === 'function') {
+                        await processAction(client, room);
+                    } else {
+                        console.error('processAction 不是一個函數');
+                    }
+                }
             }
         } catch (error) {
             console.error('處理繼續探索按鈕時發生錯誤:', error);
@@ -131,6 +155,7 @@ module.exports = new Component({
         }
     }
 }).toJSON();
+
 
 
 

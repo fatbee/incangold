@@ -63,16 +63,6 @@ module.exports = new Component({
             }
             console.log(`用戶是房主: ${userId}`);
 
-            // 檢查玩家數量
-            if (room.players.length < 2) {
-                console.error(`玩家數量不足: ${room.players.length}`);
-                await interaction.reply({
-                    content: '至少需要2名玩家才能開始遊戲。',
-                    ephemeral: true
-                });
-                return;
-            }
-            console.log(`玩家數量足夠: ${room.players.length}`);
 
             // 檢查遊戲狀態
             if (room.status !== 'waiting') {

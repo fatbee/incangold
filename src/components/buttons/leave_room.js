@@ -104,15 +104,25 @@ async function leaveRoomProcess(client, interaction, roomId, userId) {
         // 如果是房主離開，房間已經被解散
         if (isHost) {
             try {
-                const disbandEmbed = new EmbedBuilder()
-                    .setTitle('🎮 多人印加寶藏遊戲房間')
-                    .setDescription(`房間 \`${roomId}\` 已被解散。`)
-                    .setColor('#ff0000')
-                    .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
-
-                await interaction.message.edit({ embeds: [disbandEmbed], components: [] });
+                // 刪除消息
+                await interaction.message.delete();
+                console.log(`房主離開，已刪除房間消息: roomId=${roomId}`);
             } catch (error) {
-                console.error('更新房間信息錯誤:', error);
+                console.error('刪除房間消息錯誤:', error);
+
+                // 如果無法刪除消息，嘗試編輯消息
+                try {
+                    const disbandEmbed = new EmbedBuilder()
+                        .setTitle('🎮 多人印加寶藏遊戲房間')
+                        .setDescription(`房間 \`${roomId}\` 已被解散。`)
+                        .setColor('#ff0000')
+                        .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
+
+                    await interaction.message.edit({ embeds: [disbandEmbed], components: [] });
+                    console.log(`無法刪除消息，已更新為解散狀態: roomId=${roomId}`);
+                } catch (editError) {
+                    console.error('更新房間消息為解散狀態時發生錯誤:', editError);
+                }
             }
         } else {
             // 更新房間信息

@@ -34,6 +34,7 @@ class GameRoomManager {
                 gold: 0, // 當前回合的總金幣
                 playerGold: {}, // 每個玩家的金幣
                 playerSecuredGold: {}, // 每個玩家已保存的金幣
+                playerCollectedTreasures: {}, // 每個玩家已收集的寶藏
                 playerActions: {}, // 每個玩家的行動選擇
                 dangersEncountered: [], // 當前回合遇到的危險
                 eventLog: [], // 事件記錄
@@ -54,6 +55,8 @@ class GameRoomManager {
         // 初始化玩家金幣和行動
         room.gameState.playerGold[hostId] = 0;
         room.gameState.playerSecuredGold[hostId] = 0;
+        room.gameState.playerCollectedTreasures[hostId] = [];
+        console.log(`初始化房主寶藏列表: hostId=${hostId}, treasures=[]`);
         room.gameState.playerActions[hostId] = null;
 
         // 存儲房間
@@ -122,6 +125,8 @@ class GameRoomManager {
         // 初始化玩家金幣和行動
         room.gameState.playerGold[playerId] = 0;
         room.gameState.playerSecuredGold[playerId] = 0;
+        room.gameState.playerCollectedTreasures[playerId] = [];
+        console.log(`初始化玩家寶藏列表: roomId=${roomId}, playerId=${playerId}, treasures=[]`);
         room.gameState.playerActions[playerId] = null;
 
         // 將玩家映射到房間
@@ -190,7 +195,7 @@ class GameRoomManager {
      */
     startGame(roomId) {
         const room = this.getRoom(roomId);
-        if (!room || room.status !== 'waiting' || room.players.length < 2) return false;
+        if (!room || room.status !== 'waiting') return false;
 
         // 更新房間狀態
         room.status = 'playing';
@@ -201,16 +206,29 @@ class GameRoomManager {
 
     /**
      * 設置玩家行動
-     * @param {string} playerId - 玩家的Discord ID
-     * @param {string} action - 行動類型 ('continue' 或 'return')
+     * @param {string} playerId - 玩家ID
+     * @param {string} action - 行動（'continue' 或 'return'）
      * @returns {boolean} 是否成功設置
      */
     setPlayerAction(playerId, action) {
         const room = this.getPlayerRoom(playerId);
         if (!room || room.status !== 'playing') return false;
 
+        // 檢查玩家是否已返回營地
+        if (room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true) {
+            return false; // 已返回營地的玩家不能再選擇行動
+        }
+
         // 設置玩家行動
         room.gameState.playerActions[playerId] = action;
+
+        // 如果玩家選擇返回營地，立即標記為已返回
+        if (action === 'return') {
+            if (!room.gameState.playerReturned) {
+                room.gameState.playerReturned = {};
+            }
+            room.gameState.playerReturned[playerId] = true;
+        }
 
         return true;
     }
@@ -224,20 +242,32 @@ class GameRoomManager {
         const room = this.getRoom(roomId);
         if (!room || room.status !== 'playing') return false;
 
-        // 檢查每個玩家是否都已選擇行動，跳過已返回營地的玩家
+        // 檢查是否有任何玩家尚未選擇行動
+        let activePlayersCount = 0;
+        let actedPlayersCount = 0;
+
         for (const playerId of room.players) {
-            // 跳過已經返回營地的玩家（通過playerActions或playerReturned標記）
-            if (room.gameState.playerActions[playerId] === 'return' ||
-                (room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true)) {
+            // 跳過已經返回營地的玩家（通過playerReturned標記）
+            if (room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true) {
                 continue;
             }
 
-            if (room.gameState.playerActions[playerId] === null) {
-                return false;
+            // 計算活躍玩家數量
+            activePlayersCount++;
+
+            // 計算已選擇行動的玩家數量
+            if (room.gameState.playerActions[playerId] !== null) {
+                actedPlayersCount++;
             }
         }
 
-        return true;
+        // 如果沒有活躍玩家（所有玩家都已返回營地），返回true
+        if (activePlayersCount === 0) {
+            return true;
+        }
+
+        // 檢查是否所有活躍玩家都已選擇行動
+        return actedPlayersCount === activePlayersCount;
     }
 
     /**
@@ -251,43 +281,152 @@ class GameRoomManager {
 
         // 獲取繼續探索的玩家
         const continuingPlayers = room.players.filter(
-            playerId => room.gameState.playerActions[playerId] === 'continue'
+            playerId => {
+                // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
+                const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                // 只有未返回營地且選擇繼續探索的玩家才算繼續探索
+                return !hasReturnedToCamp && room.gameState.playerActions[playerId] === 'continue';
+            }
         );
 
         // 獲取返回營地的玩家
         const returningPlayers = room.players.filter(
-            playerId => room.gameState.playerActions[playerId] === 'return'
+            playerId => {
+                // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
+                const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+                // 檢查玩家是否在當前行動中選擇返回營地
+                const isReturningNow = room.gameState.playerActions[playerId] === 'return';
+                // 只有未返回營地且選擇返回營地的玩家才算返回營地
+                return !hasReturnedToCamp && isReturningNow;
+            }
         );
 
-        // 如果沒有玩家繼續探索，所有玩家都返回營地
-        if (continuingPlayers.length === 0) {
+        // 檢查是否所有玩家都已返回營地（包括之前已返回的和當前選擇返回的）
+        const allPlayersReturned = room.players.every(playerId => {
+            // 檢查玩家是否已返回營地（在當前回合或之前的行動中）
+            const hasReturnedToCamp = room.gameState.playerReturned && room.gameState.playerReturned[playerId] === true;
+            // 檢查玩家是否在當前行動中選擇返回營地
+            const isReturningNow = room.gameState.playerActions[playerId] === 'return';
+            // 玩家已返回營地或當前選擇返回營地
+            return hasReturnedToCamp || isReturningNow;
+        });
+
+        // 如果所有玩家都返回營地，結束當前行動但不自動進入下一回合
+        if (allPlayersReturned) {
+            // 檢查是否有寶藏在場上
+            let luckyPlayerId = null;
+            let treasureValue = 0;
+
+            if (room.gameState.treasureInPlay && room.gameState.treasureValue > 0) {
+                // 保存寶藏值以便後續使用
+                treasureValue = room.gameState.treasureValue;
+                console.log(`所有玩家返回營地，檢測到寶藏在場上: roomId=${room.id}, treasureValue=${treasureValue}`);
+
+                // 如果只有一個玩家返回營地，該玩家獲得寶藏
+                if (returningPlayers.length === 1) {
+                    luckyPlayerId = returningPlayers[0];
+
+                    // 記錄玩家獲得的寶藏
+                    if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
+                        room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                    }
+                    room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
+                    console.log(`玩家獲得寶藏: roomId=${room.id}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                    console.log(`玩家寶藏列表: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+                }
+
+                // 重置寶藏狀態
+                room.gameState.treasureInPlay = false;
+                room.gameState.treasureValue = 0;
+            }
+
             // 處理所有玩家返回營地的情況
             for (const playerId of room.players) {
                 // 將當前金幣添加到已保存的金幣中
-                room.gameState.playerSecuredGold[playerId] += room.gameState.playerGold[playerId];
+                room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + (room.gameState.playerGold[playerId] || 0);
                 // 重置當前金幣
                 room.gameState.playerGold[playerId] = 0;
                 // 重置玩家行動
                 room.gameState.playerActions[playerId] = null;
             }
 
-            // 進入下一回合
-            room.gameState.currentRound++;
+            // 保存當前回合的狀態，但不自動進入下一回合
+            // 玩家需要點擊"下一回合"按鈕才能進入下一回合
+            // 保存當前行動次數，用於顯示
+            const currentActions = room.gameState.actionsInRound;
+            console.log(`保存當前行動次數: roomId=${room.id}, actionsInRound=${currentActions}`);
+
+            // 保存事件日誌以便顯示
+            const eventLog = [...room.gameState.eventLog];
+            console.log(`保存事件日誌: roomId=${room.id}, eventLog=${JSON.stringify(eventLog)}`);
+
+            // 重置其他狀態
+            room.gameState.gold = 0;
+            room.gameState.dangersEncountered = [];
+            // 不清空事件記錄，保留給結果嵌入消息使用
+            room.gameState.lastOutcome = null;
+            room.gameState.playerReturned = {}; // 重置玩家返回營地的標記
+
+            // 確保返回所有玩家
+            const allPlayers = [...room.players];
+            console.log(`所有玩家返回營地: roomId=${room.id}, players=${JSON.stringify(allPlayers)}`);
+
+            // 構建返回對象
+            const returnObj = {
+                type: 'all_returned',
+                returningPlayers: allPlayers, // 所有玩家都是返回的玩家
+                continuingPlayers: [], // 沒有繼續探索的玩家
+                actionsInRound: currentActions, // 傳遞當前行動次數
+                eventLog: eventLog, // 傳遞事件日誌
+                nextRound: true,
+                isGameOver: room.status === 'finished'
+            };
+
+            // 如果有玩家獲得寶藏，添加相關信息
+            if (luckyPlayerId && treasureValue > 0) {
+                returnObj.treasureCollected = true;
+                returnObj.treasureValue = treasureValue;
+                returnObj.luckyPlayer = luckyPlayerId;
+                console.log(`添加寶藏信息到返回對象: treasureValue=${treasureValue}, luckyPlayer=${luckyPlayerId}`);
+            }
+
+            return returnObj;
+        }
+
+        // 檢查是否有重複危險
+        const lastOutcome = room.gameState.lastOutcome;
+        const isDuplicateDanger = lastOutcome &&
+                                 lastOutcome.type === 'danger' &&
+                                 lastOutcome.isDuplicate;
+
+        // 如果是重複危險，處理回合結束但不自動進入下一回合
+        if (isDuplicateDanger) {
+            // 繼續探索的玩家失去所有未保存的金幣
+            for (const playerId of continuingPlayers) {
+                room.gameState.playerGold[playerId] = 0;
+            }
+
+            // 為返回營地的玩家保存金幣
+            for (const playerId of returningPlayers) {
+                room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + (room.gameState.playerGold[playerId] || 0);
+                room.gameState.playerGold[playerId] = 0;
+            }
+
+            // 保存當前回合的狀態，但不自動進入下一回合
+            // 玩家需要點擊"下一回合"按鈕才能進入下一回合
             room.gameState.actionsInRound = 0;
             room.gameState.gold = 0;
             room.gameState.dangersEncountered = [];
             room.gameState.eventLog = [];
-            room.gameState.lastOutcome = null;
-
-            // 檢查遊戲是否結束
-            if (room.gameState.currentRound > room.gameState.maxRounds) {
-                room.status = 'finished';
-            }
+            room.gameState.playerReturned = {}; // 重置玩家返回營地的標記
 
             return {
-                type: 'all_returned',
+                type: 'danger',
+                value: lastOutcome.value,
+                isDuplicate: true,
+                continuingPlayers,
                 returningPlayers,
-                nextRound: room.gameState.currentRound,
+                nextRound: true,
                 isGameOver: room.status === 'finished'
             };
         }
@@ -354,7 +493,7 @@ class GameRoomManager {
 
             // 為返回營地的玩家保存金幣
             for (const playerId of returningPlayers) {
-                room.gameState.playerSecuredGold[playerId] += room.gameState.playerGold[playerId];
+                room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + (room.gameState.playerGold[playerId] || 0);
                 room.gameState.playerGold[playerId] = 0;
                 room.gameState.playerActions[playerId] = null;
             }
@@ -390,9 +529,22 @@ class GameRoomManager {
                 room.gameState.treasureInPlay = false;
                 room.gameState.treasureValue = 0;
 
+                // 記錄玩家獲得的寶藏
+                if (!room.gameState.playerCollectedTreasures[luckyPlayerId]) {
+                    room.gameState.playerCollectedTreasures[luckyPlayerId] = [];
+                }
+                room.gameState.playerCollectedTreasures[luckyPlayerId].push(treasureValue);
+                console.log(`玩家獲得寶藏: roomId=${roomId}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                console.log(`玩家寶藏列表: ${JSON.stringify(room.gameState.playerCollectedTreasures)}`);
+
+                // 確保寶藏被正確記錄
+                if (!room.gameState.playerCollectedTreasures[luckyPlayerId].includes(treasureValue)) {
+                    console.error(`寶藏記錄失敗: roomId=${roomId}, playerId=${luckyPlayerId}, treasureValue=${treasureValue}`);
+                }
+
                 // 為返回營地的玩家保存金幣
                 for (const playerId of returningPlayers) {
-                    room.gameState.playerSecuredGold[playerId] += room.gameState.playerGold[playerId];
+                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + (room.gameState.playerGold[playerId] || 0);
                     room.gameState.playerGold[playerId] = 0;
                     room.gameState.playerActions[playerId] = null;
                 }
@@ -413,7 +565,7 @@ class GameRoomManager {
                 // 沒有玩家或多個玩家返回營地，寶藏保留在場上
                 // 為返回營地的玩家保存金幣
                 for (const playerId of returningPlayers) {
-                    room.gameState.playerSecuredGold[playerId] += room.gameState.playerGold[playerId];
+                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + (room.gameState.playerGold[playerId] || 0);
                     room.gameState.playerGold[playerId] = 0;
                     room.gameState.playerActions[playerId] = null;
                 }
@@ -457,18 +609,13 @@ class GameRoomManager {
 
                 // 不清空事件記錄，保留給結果嵌入消息使用
 
-                // 進入下一回合
-                room.gameState.currentRound++;
+                // 準備下一回合的狀態，但不自動增加回合數
+                // 玩家需要點擊"下一回合"按鈕才能進入下一回合
                 room.gameState.actionsInRound = 0;
                 room.gameState.gold = 0;
                 room.gameState.dangersEncountered = [];
                 // 不清空事件記錄，保留給結果嵌入消息使用
                 // 在startNewRound函數中會清空事件記錄
-
-                // 檢查遊戲是否結束
-                if (room.gameState.currentRound > room.gameState.maxRounds) {
-                    room.status = 'finished';
-                }
             }
 
             // 為返回營地的玩家保存金幣
@@ -476,7 +623,7 @@ class GameRoomManager {
             if (isDuplicateDanger) {
                 // 只為返回營地的玩家保存金幣
                 for (const playerId of returningPlayers) {
-                    room.gameState.playerSecuredGold[playerId] += room.gameState.playerGold[playerId];
+                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + (room.gameState.playerGold[playerId] || 0);
                     room.gameState.playerGold[playerId] = 0;
                     room.gameState.playerActions[playerId] = null;
                 }
@@ -489,7 +636,7 @@ class GameRoomManager {
             } else {
                 // 正常情況下，為返回營地的玩家保存金幣
                 for (const playerId of returningPlayers) {
-                    room.gameState.playerSecuredGold[playerId] += room.gameState.playerGold[playerId];
+                    room.gameState.playerSecuredGold[playerId] = (room.gameState.playerSecuredGold[playerId] || 0) + (room.gameState.playerGold[playerId] || 0);
                     room.gameState.playerGold[playerId] = 0;
                     room.gameState.playerActions[playerId] = null;
                 }
@@ -518,4 +665,9 @@ class GameRoomManager {
 const gameRoomManager = new GameRoomManager();
 
 module.exports = gameRoomManager;
+
+
+
+
+
 
