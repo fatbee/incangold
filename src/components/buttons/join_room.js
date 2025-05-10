@@ -75,14 +75,17 @@ module.exports = new Component({
             }
             console.log(`玩家不在房間中: ${userId}`);
 
-            
+
             // 獲取玩家名稱
             const playerName = interaction.user.username;
             console.log(`玩家名稱: ${playerName}`);
 
             // 將玩家添加到房間
             console.log(`嘗試將玩家添加到房間: ${userId}, ${playerName}`);
-            const success = gameRoomManager.addPlayer(roomId, userId, playerName);
+            // 獲取玩家頭像URL
+            const playerAvatar = interaction.user.displayAvatarURL();
+            // 使用正確的joinRoom方法而不是不存在的addPlayer方法
+            const success = gameRoomManager.joinRoom(roomId, userId, playerName, playerAvatar);
             if (!success) {
                 console.error(`添加玩家失敗: ${roomId}, ${userId}`);
                 await interaction.reply({

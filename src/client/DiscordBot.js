@@ -7,6 +7,8 @@ const ComponentsHandler = require("./handler/ComponentsHandler");
 const ComponentsListener = require("./handler/ComponentsListener");
 const EventsHandler = require("./handler/EventsHandler");
 const { QuickYAML } = require('quick-yaml.db');
+const fs = require('fs');
+const path = require('path');
 
 class DiscordBot extends Client {
     collection = {
@@ -32,7 +34,30 @@ class DiscordBot extends Client {
     commands_handler = new CommandsHandler(this);
     components_handler = new ComponentsHandler(this);
     events_handler = new EventsHandler(this);
-    database = new QuickYAML(config.database.path);
+
+    // Initialize database with error handling
+    database = (() => {
+        try {
+            // Ensure the database file exists
+            const dbPath = path.resolve(process.cwd(), config.database.path);
+            if (!fs.existsSync(dbPath)) {
+                // Create default database file
+                const defaultContent = '# Incangold Bot Database\n# This file is automatically managed by the bot\n\n';
+                fs.writeFileSync(dbPath, defaultContent, 'utf8');
+                info(`Created new database file at ${dbPath}`);
+            }
+            return new QuickYAML(config.database.path);
+        } catch (err) {
+            error(`Failed to initialize database: ${err.message}`);
+            // Return a mock database object that won't crash the application
+            return {
+                has: () => false,
+                get: () => null,
+                set: () => {},
+                delete: () => {}
+            };
+        }
+    })();
 
     constructor() {
         super({
@@ -52,7 +77,7 @@ class DiscordBot extends Client {
                 }]
             }
         });
-        
+
         new CommandsListener(this);
         new ComponentsListener(this);
     }

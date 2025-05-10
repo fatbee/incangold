@@ -76,7 +76,7 @@ module.exports = new Component({
             }
 
             // 檢查是否是最後一回合
-            if (room.gameState.currentRound >= room.gameState.maxRounds) {
+            if (room.gameState.currentRound > room.gameState.maxRounds) {
                 console.log(`已達到最大回合數，顯示最終結果: roomId=${room.id}, currentRound=${room.gameState.currentRound}, maxRounds=${room.gameState.maxRounds}`);
 
                 // 遊戲結束

@@ -5,6 +5,18 @@ const { getImageAttachment } = require('../../../utils/configManager');
 const configManager = require('../../../utils/configManager');
 const gameRoomManager = require('../../../utils/GameRoomManager');
 const timerManager = require('../../../utils/TimerManager');
+
+/**
+ * 格式化回合顯示文本
+ * @param {Object} room - 房間對象
+ * @param {boolean} showCurrentRound - 是否顯示當前回合（true）或已完成回合（false）
+ * @returns {string} 格式化的回合文本
+ */
+function formatRoundDisplay(room, showCurrentRound = false) {
+    // 如果showCurrentRound為true，顯示當前回合；否則顯示已完成回合（當前回合-1）
+    const roundToShow = showCurrentRound ? room.gameState.currentRound : room.gameState.currentRound - 1;
+    return `${roundToShow}/${room.gameState.maxRounds}`;
+}
 const { createGameActionButtons, createNextRoundButtons } = require('../../../utils/ButtonComponents');
 
 module.exports = new ApplicationCommand({
@@ -466,7 +478,7 @@ module.exports = new ApplicationCommand({
                         .setDescription('新的回合開始了！請選擇你的行動。\n\n你有20秒的時間做出選擇，或者等待所有玩家都做出選擇。')
                         .setColor('#0099ff')
                         .addFields(
-                            { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                            { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                             { name: '行動次數', value: `${room.gameState.actionsInRound}`, inline: true },
                             { name: '⏱️ 倒數計時', value: '20 秒', inline: false }
                         )
@@ -786,6 +798,12 @@ module.exports.processAction = async function processAction(client, room) {
         // 定義處理行動的函數
         console.log(`處理行動: roomId=${room.id}`);
 
+        // 檢查回合是否已結束
+        if (room.gameState.roundEnded) {
+            console.log(`回合已結束，不再處理行動: roomId=${room.id}`);
+            return;
+        }
+
         // 為未做出選擇的玩家設置默認行動
         let playersUpdated = false;
         for (const playerId of room.players) {
@@ -878,6 +896,9 @@ module.exports.processAction = async function processAction(client, room) {
 
             console.log(`發現金幣: roomId=${room.id}, goldValue=${goldValue}, goldPerPlayer=${goldPerPlayer}`);
 
+            // 標記需要創建新消息
+            room.gameState.createNewMessage = true;
+
             // 標記選擇返回營地的玩家
             for (const playerId of room.players) {
                 if (room.gameState.playerActions[playerId] === 'return') {
@@ -916,6 +937,9 @@ module.exports.processAction = async function processAction(client, room) {
             };
 
             console.log(`遇到危險: roomId=${room.id}, dangerType=${dangerType}, isDuplicate=${isDuplicateDanger}`);
+
+            // 標記需要創建新消息
+            room.gameState.createNewMessage = true;
 
             // 標記選擇返回營地的玩家
             for (const playerId of room.players) {
@@ -980,7 +1004,7 @@ module.exports.processAction = async function processAction(client, room) {
                     .setDescription(`遇到了${dangerName}！這是第二次遇到相同的危險，所有繼續探索的玩家失去了所有未保存的金幣，且本回合結束！`)
                     .setColor('#ff0000')
                     .addFields(
-                        { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                        { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                         { name: '行動次數', value: `${room.gameState.actionsInRound}`, inline: true }
                     )
                     .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -1037,13 +1061,40 @@ module.exports.processAction = async function processAction(client, room) {
                     // 使用共用組件創建下一回合按鈕
                     const row = createNextRoundButtons(room.id);
 
-                    // 更新消息
+                    // 獲取頻道
                     const channel = await client.channels.fetch(room.channelId);
-                    const message = await channel.messages.fetch(room.messageId);
-                    await message.edit({ embeds: [dangerEmbed], components: [row] });
+
+                    // 獲取舊消息
+                    const oldMessage = await channel.messages.fetch(room.messageId);
+
+                    // 創建新消息
+                    const newMessage = await channel.send({ embeds: [dangerEmbed], components: [row] });
+
+                    // 更新房間的消息ID
+                    room.messageId = newMessage.id;
+
+                    // 嘗試刪除舊消息
+                    try {
+                        await oldMessage.delete();
+                        console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${oldMessage.id}, newMessageId=${newMessage.id}`);
+                    } catch (deleteError) {
+                        console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+                    }
 
                     // 清除計時器
                     timerManager.clearTimer(`room_${room.id}`);
+
+                    // 準備下一回合的狀態，但不自動增加回合數
+                    // 玩家需要點擊"下一回合"按鈕才能進入下一回合
+                    room.gameState.actionsInRound = 0;
+                    room.gameState.gold = 0;
+                    // 不清空事件記錄，保留給結果嵌入消息使用
+
+                    // 重要：標記回合已結束，這樣玩家就不能再做出選擇
+                    room.gameState.roundEnded = true;
+
+                    // 添加1秒延遲，讓玩家有時間閱讀內容
+                    console.log(`添加1秒延遲，讓玩家有時間閱讀內容: roomId=${room.id}`);
 
                     // 不再設置新的計時器，因為回合已經結束
                     return;
@@ -1084,6 +1135,9 @@ module.exports.processAction = async function processAction(client, room) {
                     luckyPlayer: luckyPlayerId,
                     timestamp: Date.now()
                 };
+
+                // 標記需要創建新消息
+                room.gameState.createNewMessage = true;
             } else {
                 // 沒有玩家或多個玩家返回營地，寶藏保留在場上
                 // 記錄事件
@@ -1096,6 +1150,9 @@ module.exports.processAction = async function processAction(client, room) {
                     treasureInPlay: true,
                     timestamp: Date.now()
                 };
+
+                // 標記需要創建新消息
+                room.gameState.createNewMessage = true;
             }
 
             // 標記選擇返回營地的玩家
@@ -1129,6 +1186,12 @@ module.exports.processAction = async function processAction(client, room) {
                 // 再次更新遊戲消息，準備下一個行動
                 await updateGameMessage(client, room);
 
+                // 檢查回合是否已結束
+                if (room.gameState.roundEnded) {
+                    console.log(`回合已結束，不設置新的計時器: roomId=${room.id}`);
+                    return;
+                }
+
                 // 設置新的計時器
                 console.log(`設置新的計時器: roomId=${room.id}`);
 
@@ -1138,6 +1201,11 @@ module.exports.processAction = async function processAction(client, room) {
                         `room_${room.id}`,
                         async () => {
                             console.log(`計時器回調觸發: roomId=${room.id}`);
+                            // 再次檢查回合是否已結束
+                            if (room.gameState.roundEnded) {
+                                console.log(`回合已結束，不處理行動: roomId=${room.id}`);
+                                return;
+                            }
                             await processAction(client, room);
                         },
                         async (remainingSeconds) => {
@@ -1178,12 +1246,16 @@ module.exports.processAction = async function processAction(client, room) {
                     console.log(`計時器已設置: roomId=${room.id}`);
                 };
 
-                // 調用設置計時器函數
-                setActionTimer();
+                // 添加1秒延遲，讓玩家有時間閱讀內容
+                console.log(`添加1秒延遲，讓玩家有時間閱讀內容: roomId=${room.id}`);
+                setTimeout(() => {
+                    // 調用設置計時器函數
+                    setActionTimer();
+                }, 1000); // 1秒延遲
             } catch (timeoutError) {
                 console.error(`setTimeout回調中發生錯誤: roomId=${room.id}`, timeoutError);
             }
-        
+
         } catch (updateError) {
             console.error(`更新遊戲消息時發生錯誤: roomId=${room.id}`, updateError);
         }
@@ -1213,7 +1285,7 @@ async function updateGameMessage(client, room) {
             .setDescription('請選擇你的行動。\n\n你有20秒的時間做出選擇，或者等待所有玩家都做出選擇。')
             .setColor(hasDanger ? '#ff0000' : hasTreasure ? '#FFD700' : '#0099ff') // 如果遇到危險，使用紅色；如果遇到寶藏，使用金色；否則使用藍色
             .addFields(
-                { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                 { name: '行動次數', value: `${room.gameState.actionsInRound}/30`, inline: true },
                 { name: '⏱️ 倒數計時', value: '20 秒', inline: false }
             )
@@ -1273,9 +1345,12 @@ async function updateGameMessage(client, room) {
                 if (outcome.isDuplicate) {
                     embed.addFields({
                         name: '⚠️ 危險！',
-                        value: `遇到了第二次 ${dangerName}！所有繼續探索的玩家失去了所有未保存的金幣，且本回合不會獲得任何金幣。`,
+                        value: `遇到了第二次 ${dangerName}！所有繼續探索的玩家失去了所有未保存的金幣，且本回合結束！`,
                         inline: false
                     });
+
+                    // 標記回合已結束
+                    room.gameState.roundEnded = true;
                 } else {
                     embed.addFields({
                         name: '⚠️ 危險！',
@@ -1328,11 +1403,45 @@ async function updateGameMessage(client, room) {
             });
         }
 
-        // 使用共用組件創建按鈕
-        const row = createGameActionButtons(room.id);
+        // 檢查是否所有玩家都已做出選擇
+        const allPlayersActed = room.players.every(pid =>
+            room.gameState.playerActions[pid] !== null ||
+            (room.gameState.playerReturned && room.gameState.playerReturned[pid])
+        );
 
-        // 更新消息
-        await message.edit({ embeds: [embed], components: [row] });
+        // 檢查是否有最後一次行動結果
+        const hasLastOutcome = room.gameState.lastOutcome !== null;
+
+        // 如果所有玩家都已做出選擇且有行動結果，或者特別標記需要創建新消息，創建新消息
+        if ((allPlayersActed && hasLastOutcome && !room.gameState.roundEnded) || room.gameState.createNewMessage) {
+            // 重置創建新消息標記
+            room.gameState.createNewMessage = false;
+            // 創建新消息
+            const row = createGameActionButtons(room.id);
+            const newMessage = await channel.send({ embeds: [embed], components: [row] });
+
+            // 更新房間的消息ID
+            room.messageId = newMessage.id;
+
+            // 嘗試刪除舊消息
+            try {
+                await message.delete();
+                console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${message.id}, newMessageId=${newMessage.id}`);
+            } catch (deleteError) {
+                console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+            }
+        } else {
+            // 否則更新現有消息
+            if (room.gameState.roundEnded) {
+                // 如果回合已結束，使用下一回合按鈕
+                const row = createNextRoundButtons(room.id);
+                await message.edit({ embeds: [embed], components: [row] });
+            } else {
+                // 否則使用遊戲行動按鈕
+                const row = createGameActionButtons(room.id);
+                await message.edit({ embeds: [embed], components: [row] });
+            }
+        }
         return true;
     } catch (error) {
         console.error(`更新遊戲消息時發生錯誤: roomId=${room.id}`, error);
@@ -1365,6 +1474,9 @@ async function processRoundResult(client, room) {
             result.type = 'danger';
             result.value = room.gameState.lastOutcome.value;
             result.isDuplicate = true;
+
+            // 標記回合已結束
+            room.gameState.roundEnded = true;
         }
 
         // 獲取頻道和消息
@@ -1390,7 +1502,7 @@ async function processRoundResult(client, room) {
                 .setDescription(description)
                 .setColor('#00ff00')
                 .addFields(
-                    { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                    { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                     { name: '行動次數', value: `${result.actionsInRound || room.gameState.actionsInRound || 0}`, inline: true }
                 )
                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -1450,7 +1562,7 @@ async function processRoundResult(client, room) {
                 .setDescription(`發現了 ${result.value} 金幣！每位繼續探索的玩家獲得 ${result.goldPerPlayer} 金幣。`)
                 .setColor('#ffd700')
                 .addFields(
-                    { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                    { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                     { name: '行動次數', value: `${room.gameState.actionsInRound + 1}`, inline: true }
                 )
                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -1492,7 +1604,7 @@ async function processRoundResult(client, room) {
                 .setDescription(description)
                 .setColor('#FFD700') // 金色/黃色
                 .addFields(
-                    { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                    { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                     { name: '行動次數', value: `${room.gameState.actionsInRound + 1}`, inline: true }
                 )
                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -1532,10 +1644,10 @@ async function processRoundResult(client, room) {
 
             resultEmbed = new EmbedBuilder()
                 .setTitle(`⚠️ 多人印加寶藏遊戲 - 遇到危險！`)
-                .setDescription(`遇到了${dangerName}！${result.isDuplicate ? '這是第二次遇到相同的危險，所有繼續探索的玩家失去了所有未保存的金幣，且本回合不會獲得任何金幣！' : ''}`)
+                .setDescription(`遇到了${dangerName}！${result.isDuplicate ? '這是第二次遇到相同的危險，所有繼續探索的玩家失去了所有未保存的金幣，且本回合結束！' : ''}`)
                 .setColor('#ff0000')
                 .addFields(
-                    { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                    { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                     { name: '行動次數', value: `${room.gameState.actionsInRound + 1}`, inline: true }
                 )
                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -1548,6 +1660,8 @@ async function processRoundResult(client, room) {
                 let playerAction;
                 if (result.isDuplicate && result.continuingPlayers.includes(playerId)) {
                     playerAction = '💀 死亡';
+                    // 標記回合已結束
+                    room.gameState.roundEnded = true;
                 } else {
                     playerAction = result.continuingPlayers.includes(playerId) ? '繼續探索' : '返回營地';
                 }
@@ -1698,8 +1812,23 @@ async function processRoundResult(client, room) {
             // 使用共用組件創建下一回合按鈕
             const row = createNextRoundButtons(room.id);
 
-            // 更新消息
-            await message.edit({ embeds: [resultEmbed], components: [row] });
+            // 創建新消息
+            const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
+
+            // 更新房間的消息ID
+            room.messageId = newMessage.id;
+
+            // 嘗試刪除舊消息
+            try {
+                await message.delete();
+                console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${message.id}, newMessageId=${newMessage.id}`);
+            } catch (deleteError) {
+                console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+            }
+
+            // 添加1秒延遲，讓玩家有時間閱讀內容
+            console.log(`添加1秒延遲，讓玩家有時間閱讀內容: roomId=${room.id}`);
+            // 注意：這裡不需要等待延遲完成，因為這只是為了下一回合的準備
 
 
         }
@@ -1918,6 +2047,8 @@ async function startNewRound(client, room) {
         room.gameState.playerReturned = {}; // 重置玩家返回營地的標記
         room.gameState.treasureInPlay = false; // 重置寶藏卡狀態
         room.gameState.treasureValue = 0;
+        room.gameState.roundEnded = false; // 重置回合結束標記
+        room.gameState.createNewMessage = false; // 重置創建新消息標記
 
         // 初始化回合卡牌組
         initializeRoundDeck(room);
@@ -1936,7 +2067,7 @@ async function startNewRound(client, room) {
             .setDescription('新的回合開始了！請選擇你的行動。\n\n你有20秒的時間做出選擇，或者等待所有玩家都做出選擇。')
             .setColor('#0099ff') // 新回合始終使用藍色
             .addFields(
-                { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                 { name: '行動次數', value: `${room.gameState.actionsInRound}/30`, inline: true },
                 { name: '⏱️ 倒數計時', value: '20 秒', inline: false }
             )
@@ -1983,12 +2114,23 @@ async function startNewRound(client, room) {
                 return;
             }
 
-            console.log(`嘗試更新消息: roomId=${room.id}`);
-            await message.edit({ embeds: [roundEmbed], components: [row] });
-            console.log(`消息已更新: roomId=${room.id}`);
+            console.log(`嘗試創建新消息: roomId=${room.id}`);
+            const newMessage = await channel.send({ embeds: [roundEmbed], components: [row] });
+
+            // 更新房間的消息ID
+            room.messageId = newMessage.id;
+            console.log(`新消息已創建: roomId=${room.id}, newMessageId=${newMessage.id}`);
+
+            // 嘗試刪除舊消息
+            try {
+                await message.delete();
+                console.log(`已刪除舊消息: roomId=${room.id}, oldMessageId=${message.id}`);
+            } catch (deleteError) {
+                console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+            }
 
             // 保存消息引用以便將來使用
-            room.gameMessage = message;
+            room.gameMessage = newMessage;
 
             // 設置計時器
             const timerEndTime = Date.now() + 20000; // 20秒
@@ -2064,7 +2206,7 @@ async function startNewRound(client, room) {
                             .setDescription(`已達到行動次數上限(30次)，本回合結束。所有玩家的金幣已保存。`)
                             .setColor('#FFA500') // 橙色
                             .addFields(
-                                { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                                { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                                 { name: '行動次數', value: `30`, inline: true }
                             )
                             .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -2110,8 +2252,19 @@ async function startNewRound(client, room) {
                         // 使用共用組件創建下一回合按鈕
                         const row = createNextRoundButtons(room.id);
 
-                        // 更新消息
-                        await message.edit({ embeds: [resultEmbed], components: [row] });
+                        // 創建新消息
+                        const newMessage = await channel.send({ embeds: [resultEmbed], components: [row] });
+
+                        // 更新房間的消息ID
+                        room.messageId = newMessage.id;
+
+                        // 嘗試刪除舊消息
+                        try {
+                            await message.delete();
+                            console.log(`已刪除舊消息並創建新消息: roomId=${room.id}, oldMessageId=${message.id}, newMessageId=${newMessage.id}`);
+                        } catch (deleteError) {
+                            console.error(`刪除舊消息時發生錯誤: roomId=${room.id}`, deleteError);
+                        }
 
                         // 檢查遊戲是否結束
                         if (room.gameState.currentRound > room.gameState.maxRounds) {
@@ -2421,7 +2574,7 @@ async function startNewRound(client, room) {
                                 .setDescription(`遇到了${dangerName}！這是第二次遇到相同的危險，所有繼續探索的玩家失去了所有未保存的金幣，且本回合結束！`)
                                 .setColor('#ff0000')
                                 .addFields(
-                                    { name: '回合', value: `${room.gameState.currentRound}/${room.gameState.maxRounds}`, inline: true },
+                                    { name: '回合', value: formatRoundDisplay(room, true), inline: true },
                                     { name: '行動次數', value: `${room.gameState.actionsInRound}`, inline: true }
                                 )
                                 .setFooter({ text: '印加寶藏多人遊戲', iconURL: client.user.displayAvatarURL() });
@@ -2512,7 +2665,7 @@ async function startNewRound(client, room) {
                         } catch (timeoutError) {
                             console.error(`setTimeout回調中發生錯誤: roomId=${room.id}`, timeoutError);
                         }
-                        
+
                     } catch (updateError) {
                         console.error(`更新遊戲消息時發生錯誤: roomId=${room.id}`, updateError);
                     }
