@@ -19,7 +19,7 @@ module.exports = new Event({
                 .setThumbnail(member.user.displayAvatarURL({ dynamic: true }))
                 .setTimestamp();
 
-            systemChannel.send({ embeds: [welcomeEmbed] });
+            // systemChannel.send({ embeds: [welcomeEmbed] });
         }
     }
 }).toJSON();
